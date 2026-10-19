@@ -37,6 +37,8 @@ ACTIONS = {
     "issue_comments_list": ActionSpec("issues", "read"),
     "issue_create": ActionSpec("issues", "write"),
     "issue_comment": ActionSpec("issues", "write"),
+    "issue_labels_add": ActionSpec("issues", "write"),
+    "issue_label_remove": ActionSpec("issues", "write"),
     "pr_list": ActionSpec("pull_requests", "read"),
     "pr_get": ActionSpec("pull_requests", "read"),
     "pr_comments_list": ActionSpec("pull_requests", "read"),
@@ -66,6 +68,13 @@ def _text(value, name, maximum=65536, blank=False, controls=False):
         raise ActionError(f"invalid {name}")
     if not controls and any(unicodedata.category(c) == "Cc" for c in value):
         raise ActionError(f"invalid {name}")
+    return value
+
+
+def valid_label(value):
+    value = _text(value, "label", maximum=50)
+    if value in {".", ".."}:
+        raise ActionError("invalid label")
     return value
 
 
@@ -105,6 +114,8 @@ _SCHEMAS = {
     "issue_comments_list": ({"number"}, {"page", "per_page"}),
     "issue_create": ({"title"}, {"body"}),
     "issue_comment": ({"number", "body"}, set()),
+    "issue_labels_add": ({"number", "labels"}, set()),
+    "issue_label_remove": ({"number", "label"}, set()),
     "pr_list": (set(), {"state", "page", "per_page"}),
     "pr_get": ({"number"}, set()),
     "pr_comments_list": ({"number"}, {"page", "per_page"}),
@@ -141,6 +152,15 @@ def validate_params(action, params):
             if not isinstance(state, str) or state not in {"open", "closed", "all"}:
                 raise ActionError("invalid state")
             result["state"] = state
+    if action == "issue_labels_add":
+        labels = result["labels"]
+        if not isinstance(labels, list) or not 1 <= len(labels) <= 100:
+            raise ActionError("invalid labels")
+        result["labels"] = [valid_label(label) for label in labels]
+        if len({label.casefold() for label in result["labels"]}) != len(labels):
+            raise ActionError("duplicate labels")
+    if action == "issue_label_remove":
+        result["label"] = valid_label(result["label"])
     if action == "contents_read":
         path = _text(result["path"], "path", maximum=2**31, blank=True)
         if path and (path.startswith("/") or "\\" in path or any(p in {"", ".", ".."} for p in path.split("/"))):
@@ -195,6 +215,10 @@ def build_request(action: str, repo: str, params: dict) -> Request:
     repo = canonical_repo(repo)
     p = validate_params(action, params)
     prefix = f"/repos/{repo}"
+    if action == "issue_labels_add":
+        return Request("POST", prefix + f"/issues/{p['number']}/labels", {}, {"labels": p["labels"]})
+    if action == "issue_label_remove":
+        return Request("DELETE", prefix + f"/issues/{p['number']}/labels/" + quote(p["label"], safe=""), {}, None)
     if action == "repo_get":
         return Request("GET", prefix, {}, None)
     if action == "contents_read":

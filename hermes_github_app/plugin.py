@@ -97,6 +97,11 @@ def tool_schema(action):
             # handler. An equivalent single-branch anyOf preserves the raw
             # JSON value so our strict validator can reject string coercion.
             prop = {'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': maximum}]}
+        elif field == 'labels':
+            prop = {'anyOf': [{'type': 'array', 'minItems': 1, 'maxItems': 100, 'uniqueItems': True,
+                              'items': {'type': 'string', 'minLength': 1, 'maxLength': 50}}]}
+        elif field == 'label':
+            prop.update(minLength=1, maxLength=50)
         elif field == 'draft':
             prop = {'anyOf': [{'type': 'boolean'}]}
         elif field == 'state':
@@ -113,6 +118,10 @@ def tool_schema(action):
     description = action.replace('_', ' ').capitalize() + ' under host repository policy.'
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
+    if action == 'issue_labels_add':
+        description += ' Add existing repository labels to an issue; preserve unrelated labels. Requires explicit policy allowance.'
+    if action == 'issue_label_remove':
+        description += ' Remove one named label from an issue; preserve unrelated labels. Requires explicit policy allowance.'
     if action == 'pr_review_comment':
         description += ' Add an inline diff comment to an open PR whose head matched commit_id when checked. Optional start_line/start_side must be paired on the same side.'
     if action == 'pr_merge':

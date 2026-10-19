@@ -1,0 +1,20 @@
+# Issue label actions
+
+## Summary
+
+Allow an authorized agent to classify issues by adding existing repository labels or removing one label, preserving unrelated labels. These actions use the same protected GitHub App interface and repository policy as existing tools.
+
+## Behavior
+
+1. The public tools are `github_issue_labels_add` and `github_issue_label_remove`. Configuration uses `issue_labels_add` and `issue_label_remove`, without the public prefix. Both require an explicit global or repository `allow_actions` entry; neither the eight-action read profile nor the thirteen-action write profile grants them. Denials and repository exclusions continue to win.
+2. The package remains `0.1.0` and configuration remains `version: 1`. The closed catalog now has seventeen actions. An upgrade alone grants no label access and changes no existing production policy.
+3. Both tools require an exact `repo` owner/name and a strictly positive integer `number`, at most 2147483647. They operate on issues, including closed issues, and refuse pull request numbers, missing issues, unverifiable targets, or a repository identity mismatch before changing labels. The App must have Issues write permission; no broader permissions are requested.
+4. Add requires `labels`, an array of one through 100 distinct label-name strings. Each name is one through 50 Unicode characters, not whitespace-only, with no control characters, surrogate code points, or exact `.` / `..` names. Case-folded duplicate names are rejected. Names otherwise retain their exact spelling and Unicode representation; no trimming, case conversion or Unicode normalization is performed. The length and array bounds are plugin limits.
+5. Every requested addition must resolve to an existing repository label before a mutation is attempted. Adding a label already present is allowed. The operation appends labels and never replaces the issue's complete label set or explicitly creates repository labels. GitHub remains authoritative for concurrent renames, deletions, and validation; a precondition check is not an atomic reservation.
+6. Remove requires one `label` using the same name rules. It removes only that named issue label. A missing assignment or label returns GitHub's denial, not a fabricated success. There is no remove-all, full-set replacement, repository-label creation, rename, or deletion capability.
+7. Label names containing slashes, percent signs, spaces, query or fragment markers, or non-ASCII characters remain a single literal URL component when a name is used in a request path. They cannot select another repository or operation. Unknown arguments, credentials, generic request fields and configuration names with a `github_` prefix are rejected.
+8. A successful result has `ok: true` and `data` containing `number` and `labels`, an array of `{id, name}` records from GitHub's returned remaining label list. Other upstream fields, descriptions, users, URLs and credentials are omitted. Returned labels describe that response, not a guarantee against later concurrent edits or response pagination. An empty remaining list is valid after removal.
+9. Each call sends at most one label mutation. Permission failures, missing objects and explicit GitHub rejection return a sanitized error. Transport failure, server error, malformed or unverifiable success after mutation return `uncertain_outcome`; the plugin does not retry or silently fall back to terminal authentication. An uncertain result requires checking the issue before deciding what to do next.
+10. Protected configuration/key checks, token isolation, canonical repository scope checks and existing action behavior remain unchanged. The tools neither register webhook receivers nor alter Hermes routes, child presets, host security allowlists or production permissions.
+
+GitHub endpoint contracts: [add labels](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue), [remove one label](https://docs.github.com/en/rest/issues/labels#remove-a-label-from-an-issue), and [get repository label](https://docs.github.com/en/rest/issues/labels#get-a-label).

@@ -187,7 +187,7 @@ plugin.register(ctx)
 assert registry.get_entry("github_repo_get") is not None
 assert registry.get_entry("github_app_action") is None
 from hermes_github_app.actions import ACTIONS
-assert len(ACTIONS) == 15
+assert len(ACTIONS) == 17
 assert all(registry.get_entry("github_" + name) is not None for name in ACTIONS)
 assert all(registry.get_entry(name) is None for name in ACTIONS)
 inline = {"repo": "acme/demo", "number": 1, "body": "Review", "commit_id": "a" * 40,
@@ -202,6 +202,16 @@ for field in ("line", "start_line"):
 accepted = model_tools.handle_function_call("github_pr_review_comment", inline, task_id="default", session_id="native-test", tool_call_id="good-inline")
 assert json.loads(accepted)["ok"], accepted
 assert service.execute.call_args.args == ("pr_review_comment", "acme/demo", {k: v for k, v in inline.items() if k != "repo"})
+for name, args in [("github_issue_labels_add", {"repo": "acme/demo", "number": 1, "labels": ["분류/bug"]}),
+                   ("github_issue_label_remove", {"repo": "acme/demo", "number": 1, "label": "분류/bug"})]:
+    accepted = model_tools.handle_function_call(name, args, task_id="default", session_id="native-test", tool_call_id=name)
+    assert json.loads(accepted)["ok"], accepted
+    assert service.execute.call_args.args[0] == name.removeprefix("github_")
+    for field, value in (("number", "1"), ("number", True), ("labels", '["bug"]')) if "labels" in args else (("number", "1"), ("number", True)):
+        before = service.execute.call_count
+        rejected = model_tools.handle_function_call(name, dict(args, **{field: value}), task_id="default", session_id="native-test", tool_call_id="bad-label")
+        assert json.loads(rejected)["code"] == "invalid_arguments", rejected
+        assert service.execute.call_count == before
 blocked.add("execute_code")
 denied = model_tools.handle_function_call("execute_code", {"code": "1"}, task_id="default", session_id="native-test", tool_call_id="blocked-code")
 assert "existing security hook" in denied
@@ -229,14 +239,14 @@ print("Public registration kept strict arguments and an existing security hook")
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_fifteen_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
+def test_seventeen_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
     from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
     monkeypatch.setattr(plugin, 'GitHubClient', Mock())
     ctx = Mock()
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
     assert set(registrations) == {'github_' + action for action in ACTIONS}
-    assert len({id(item['handler']) for item in registrations.values()}) == 15
+    assert len({id(item['handler']) for item in registrations.values()}) == 17
     for action in ACTIONS:
         item = registrations['github_' + action]
         assert item['schema']['name'] == 'github_' + action
@@ -319,3 +329,26 @@ def test_prefixed_handlers_apply_unprefixed_policy_before_client_access(configur
     ]:
         assert json.loads(handlers[tool](args))['code'] == 'policy_denied'
     client.session.assert_not_called()
+
+
+def test_label_schemas_and_handlers_preserve_strict_types(configuration, monkeypatch):
+    service=Mock();service.execute.return_value={'ok':True,'data':{}}
+    monkeypatch.setattr(plugin,'GitHubClient',Mock())
+    monkeypatch.setattr(plugin,'GitHubService',Mock(return_value=service))
+    ctx=Mock();plugin.register(ctx)
+    registrations={call.kwargs['name']:call.kwargs for call in ctx.register_tool.call_args_list}
+    for action,params in [('issue_labels_add',{'number':1,'labels':['분류 /?#%']}),
+                          ('issue_label_remove',{'number':1,'label':'분류 /?#%'})]:
+        entry=registrations['github_'+action]
+        schema=entry['schema']['parameters']
+        assert schema['additionalProperties'] is False
+        assert schema['properties']['number']['anyOf'][0]['type']=='integer'
+        if action.endswith('_add'):
+            assert schema['properties']['labels']['anyOf'][0]=={'type':'array','minItems':1,'maxItems':100,
+                'uniqueItems':True,'items':{'type':'string','minLength':1,'maxLength':50}}
+        assert json.loads(entry['handler']({'repo':'Acme/Demo',**params}))['ok']
+        assert service.execute.call_args.args==(action,'acme/demo',params)
+        before=service.execute.call_count
+        invalid={'labels':'["bug"]'} if action.endswith('_add') else {'label':False}
+        assert json.loads(entry['handler']({'repo':'acme/demo',**params,**invalid}))['code']=='invalid_arguments'
+        assert before==service.execute.call_count

@@ -6,6 +6,8 @@ SHA = "a" * 40
 FIXTURES = {"repo_get": {}, "contents_read": {"path": "README.md"}, "issue_list": {}, "issue_get": {"number": 1}, "issue_comments_list": {"number": 1}, "issue_create": {"title": "Report"}, "issue_comment": {"number": 1, "body": "Hello"}, "pr_list": {}, "pr_get": {"number": 2}, "pr_comments_list": {"number": 2}, "pr_create": {"title": "Change", "head": "feature/a", "base": "main"}, "pr_comment": {"number": 2, "body": "Review"}, "branch_create": {"branch": "new", "source_commit_sha": SHA}, "pr_merge": {"number": 1, "expected_head_sha": SHA, "merge_method": "squash"}}
 
 
+FIXTURES["issue_labels_add"] = {"number": 1, "labels": ["bug"]}
+FIXTURES["issue_label_remove"] = {"number": 1, "label": "bug"}
 FIXTURES["pr_review_comment"] = {"number": 2, "body": "Review", "commit_id": SHA, "path": "src/main.py", "line": 10, "side": "RIGHT"}
 
 
@@ -15,7 +17,7 @@ class ActionsTests(unittest.TestCase):
         for action, params in FIXTURES.items():
             r = build_request(action, "Acme/Repo", params)
             self.assertTrue(r.path.startswith("/repos/acme/repo"))
-            self.assertIn(r.method, {"GET", "POST", "PUT"})
+            self.assertIn(r.method, {"GET", "POST", "PUT", "DELETE"})
             for override in ["url", "headers", "method", "token", "permissions", "installation_id", "approved", "force"]:
                 with self.subTest(action=action, override=override), self.assertRaises(ActionError):
                     build_request(action, "acme/repo", dict(params, **{override: "override"}))
@@ -112,6 +114,8 @@ class ActionsTests(unittest.TestCase):
             "pr_create": ("POST", "/repos/acme/repo/pulls"),
             "pr_comment": ("POST", "/repos/acme/repo/issues/2/comments"),
             "branch_create": ("POST", "/repos/acme/repo/git/refs"),
+            "issue_labels_add": ("POST", "/repos/acme/repo/issues/1/labels"),
+            "issue_label_remove": ("DELETE", "/repos/acme/repo/issues/1/labels/bug"),
             "pr_review_comment": ("POST", "/repos/acme/repo/pulls/2/comments"),
             "pr_merge": ("PUT", "/repos/acme/repo/pulls/1/merge"),
         }
@@ -142,3 +146,30 @@ class InlineReviewTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ActionError):
                 validate_params("pr_review_comment", dict(FIXTURES["pr_review_comment"], **change))
         self.assertEqual(validate_params("pr_review_comment", dict(FIXTURES["pr_review_comment"], line=2**31-1))["line"], 2**31-1)
+
+
+class LabelActionTests(unittest.TestCase):
+    def test_label_routes_and_literal_encoding(self):
+        label = '분류 /a?#%2E'
+        add = build_request('issue_labels_add', 'Acme/Repo', {'number': 3, 'labels': [label]})
+        self.assertEqual(add.body, {'labels': [label]})
+        remove = build_request('issue_label_remove', 'acme/repo', {'number': 3, 'label': label})
+        self.assertEqual(remove.method, 'DELETE')
+        self.assertEqual(remove.path, '/repos/acme/repo/issues/3/labels/%EB%B6%84%EB%A5%98%20%2Fa%3F%23%252E')
+        self.assertIsNone(remove.body)
+        for action in ('issue_labels_add', 'issue_label_remove'):
+            self.assertEqual(ACTIONS[action].permissions, {'issues': 'write'})
+
+    def test_invalid_names_and_collections(self):
+        invalid = ['', ' ', '.', '..', 'x'*51, '\x00', '\n', '\ud800', None, 12, True]
+        for label in invalid:
+            for action, field in [('issue_labels_add', 'labels'), ('issue_label_remove', 'label')]:
+                with self.subTest(action=action, label=repr(label)), self.assertRaises(ActionError):
+                    validate_params(action, {'number': 1, field: [label] if field == 'labels' else label})
+        for labels in [[], ['a']*101, ['Bug','bug'], 'bug', {'bug':True}, None, ['ß','ss']]:
+            with self.subTest(labels=labels), self.assertRaises(ActionError):
+                validate_params('issue_labels_add', {'number':1,'labels':labels})
+        self.assertEqual(validate_params('issue_labels_add', {'number':1,'labels':['x'*50,'표시 😀']})['labels'], ['x'*50,'표시 😀'])
+        for number in (True, '1', 0, -1, 2**31):
+            with self.assertRaises(ActionError):
+                validate_params('issue_label_remove', {'number':number,'label':'bug'})

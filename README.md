@@ -32,13 +32,13 @@ For each selected repository:
   - (global deny_actions + repo deny_actions)
 ```
 
-`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Configuration version 1 recognizes fifteen actions, including the requested `pr_review_comment`, which requires an explicit `allow_actions` entry. The read and write profile expansions remain unchanged; upgrading does not grant inline comments automatically.
+`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Configuration version 1 recognizes seventeen actions, including the requested `pr_review_comment`, which requires an explicit `allow_actions` entry. The read and write profile expansions remain unchanged; upgrading does not grant inline comments or label mutations automatically.
 
 | Profile | Configuration actions (public tools add `github_`) |
 | --- | --- |
 | read | `repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `pr_list`, `pr_get`, `pr_comments_list` |
 | write | All read actions plus `issue_create`, `issue_comment`, `pr_create`, `pr_comment`, `branch_create` |
-| explicit allowance only | `pr_merge`, `pr_review_comment` |
+| explicit allowance only | `pr_merge`, `pr_review_comment`, `issue_labels_add`, `issue_label_remove` |
 
 Each operation is a separate native tool named `github_<action>`; configuration actions remain unprefixed. For example, action `issue_comment` is exposed as `github_issue_comment`, and `pr_merge` as `github_pr_merge`. Arguments are flat: `github_issue_comment` takes `{repo, number, body}` and `github_pr_merge` takes `{repo, number, expected_head_sha, merge_method}`. Prefixed action names in configuration are rejected. There is no generic action dispatcher or legacy operation alias. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, file write, git push/clone, review submission or diff-reading API, PR edit/delete, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. `contents_read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
 
@@ -56,7 +56,7 @@ The host confirms that the target is an open PR in the selected repository (fork
 
 ## Host boundary
 
-The plugin registers fifteen tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. It does not depend on a Hermes source revision, private agent objects, or a hash of host files. Existing host tools, hooks, delegation, and Docker container reuse stay in place; enable `github_app` alongside them.
+The plugin registers seventeen tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. It does not depend on a Hermes source revision, private agent objects, or a hash of host files. Existing host tools, hooks, delegation, and Docker container reuse stay in place; enable `github_app` alongside them.
 
 ```yaml
 toolsets: [terminal, file, delegation, github_app]
@@ -94,4 +94,8 @@ HERMES_GITHUB_APP_HERMES_SOURCE=/absolute/path/to/hermes-agent python -m pytest 
 
 The native smoke registers the tools through Hermes's public `PluginContext`, then dispatches them through Hermes's normal tool path with a fake GitHub service. It checks that string integers, string booleans, and unknown fields are rejected, and that an existing security hook can still block a call. No live GitHub operations, production secrets, or installed profile changes are used.
 
-The operator-run [`tools/gormes_coexistence_probe.py`](tools/gormes_coexistence_probe.py) requires a prepared, fresh isolated profile. It exercises the installed Gormes hooks and Orpheus adapter with deterministic GitHub HTTP responses and a deterministic child lifecycle, plus real Docker execution and same-process container reuse. It distinguishes refusal by the unchanged host allowlist from an in-memory candidate that adds the current catalog names; it makes no production policy or profile changes. The probe uses version 1 with a read baseline and no new action allowance to check registration of the fifteen-tool catalog; it does not execute inline-comment HTTP requests. Cross-process container reuse is not tested. Set `HERMES_GITHUB_APP_GORMES_RECEIPT` to a saved probe receipt to enable its optional pytest validation, which binds the evidence to hashes of the current product modules and probe source.
+The operator-run [`tools/gormes_coexistence_probe.py`](tools/gormes_coexistence_probe.py) requires a prepared, fresh isolated profile. It exercises the installed Gormes hooks and Orpheus adapter with deterministic GitHub HTTP responses and a deterministic child lifecycle, plus real Docker execution and same-process container reuse. It distinguishes refusal by the unchanged host allowlist from an in-memory candidate that adds the current catalog names; it makes no production policy or profile changes. The probe uses version 1 with a read baseline and no new action allowance to check registration of the seventeen-tool catalog; it does not execute inline-comment HTTP requests. Cross-process container reuse is not tested. Set `HERMES_GITHUB_APP_GORMES_RECEIPT` to a saved probe receipt to enable its optional pytest validation, which binds the evidence to hashes of the current product modules and probe source.
+
+### Issue classification
+
+`github_issue_labels_add(repo, number, labels)` adds existing repository labels to an issue. `github_issue_label_remove(repo, number, label)` removes one label. Both preserve unrelated labels and reject pull request numbers. Names retain Unicode and punctuation, with plugin limits of 50 characters per name and 1–100 distinct additions per call. There is no label creation, full replacement, or remove-all tool. Each action needs an explicit unprefixed `allow_actions` entry; the write profile stays unchanged. See [the contract](docs/spec/issue-label-actions.md) and [issue-labels.yaml](examples/issue-labels.yaml). An uncertain write is never retried automatically.

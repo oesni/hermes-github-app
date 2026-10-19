@@ -367,3 +367,86 @@ def test_inline_response_returns_only_comment_metadata(key_file):
         ('id','html_url','pull_request_url','commit_id','path','line','side','created_at')}
     assert not {'body','diff_hunk','user','arbitrary','start_line','start_side'} & result.keys()
     assert len(api.calls)==5
+
+
+@pytest.mark.parametrize('action,params,method,path',[
+    ('issue_labels_add',{'number':1,'labels':['bug','분류 /?#%']},'POST','/issues/1/labels'),
+    ('issue_label_remove',{'number':1,'label':'분류 /?#%'},'DELETE','/issues/1/labels/분류 /?#%'),
+])
+def test_label_operations_preserve_unrelated_and_filter_result(key_file,action,params,method,path):
+    remaining=[{'id':8,'name':'keep','description':'secret-token','user':{'login':'hidden'}},
+               {'id':9,'name':'분류 /?#%','color':'ffffff'}]
+    api=API(key_file,{'/issues/1':{'number':1,'state':'closed'},
+        '/labels/bug':{'id':9,'name':'bug'}, '/labels/분류 /?#%':{'id':10,'name':'분류 /?#%'},
+        (method,path):remaining})
+    result=api.run(action,params)
+    assert result=={'number':1,'labels':[{'id':8,'name':'keep'},{'id':9,'name':'분류 /?#%'}]}
+    assert json.loads(api.calls[0].content)['permissions']=={'issues':'write'}
+    assert sum(r.method in {'POST','DELETE'} and '/issues/' in r.url.path for r in api.calls)==1
+    mutation=api.calls[-1]
+    assert mutation.method==method
+    if method=='DELETE':
+        assert mutation.url.raw_path.endswith(b'/labels/%EB%B6%84%EB%A5%98%20%2F%3F%23%25')
+        assert not mutation.content
+    else:
+        assert json.loads(mutation.content)=={'labels':params['labels']}
+
+
+@pytest.mark.parametrize('target',[
+    {'number':2},{'number':True},{'number':1,'pull_request':{}},httpx.Response(404),
+    {'number':1,'repository':{'full_name':'other/demo'}},
+])
+@pytest.mark.parametrize('action,params',[
+    ('issue_labels_add',{'number':1,'labels':['bug']}),
+    ('issue_label_remove',{'number':1,'label':'bug'}),
+])
+def test_label_target_mismatch_never_mutates(key_file,target,action,params):
+    api=API(key_file,{'/issues/1':target})
+    with pytest.raises(ClientError):api.run(action,params)
+    assert not any(r.method in {'DELETE','PUT'} or (r.method=='POST' and '/issues/' in r.url.path) for r in api.calls)
+
+
+@pytest.mark.parametrize('label',[httpx.Response(404),{'id':1,'name':'other'}, {'id':True,'name':'bug'},None])
+def test_missing_or_unverifiable_repository_label_never_posts(key_file,label):
+    api=API(key_file,{'/issues/1':{'number':1},'/labels/bug':label})
+    with pytest.raises(ClientError):api.run('issue_labels_add',{'number':1,'labels':['bug']})
+    assert not any(r.method=='POST' and '/issues/' in r.url.path for r in api.calls)
+
+
+@pytest.mark.parametrize('action,params,method,path',[
+    ('issue_labels_add',{'number':1,'labels':['bug']},'POST','/issues/1/labels'),
+    ('issue_label_remove',{'number':1,'label':'bug'},'DELETE','/issues/1/labels/bug'),
+])
+@pytest.mark.parametrize('failure,code',[
+    (httpx.Response(403,text='secret-token'),'github_denied'),
+    (httpx.Response(404),'github_denied'),
+    (httpx.Response(422),'github_denied'),
+    (httpx.Response(503),'uncertain_outcome'),
+    (httpx.ReadTimeout('secret-token'),'uncertain_outcome'),
+    (httpx.Response(200,json={'labels':[]}),'uncertain_outcome'),
+    (httpx.Response(200,json=[{'id':True,'name':'bug'}]),'uncertain_outcome'),
+    (httpx.Response(200,json=[{'id':1,'name':None}]),'uncertain_outcome'),
+])
+def test_label_write_error_or_malformed_success_never_retries(key_file,action,params,method,path,failure,code):
+    api=API(key_file,{'/issues/1':{'number':1},'/labels/bug':{'id':1,'name':'bug'},(method,path):failure})
+    with pytest.raises(ClientError) as caught:api.run(action,params)
+    assert caught.value.code==code and 'secret-token' not in str(caught.value)
+    assert sum(r.method==method and r.url.path.endswith(path) for r in api.calls)==1
+
+
+def test_last_label_removal_empty_result(key_file):
+    api=API(key_file,{'/issues/1':{'number':1},('DELETE','/issues/1/labels/bug'):[]})
+    assert api.run('issue_label_remove',{'number':1,'label':'bug'})=={'number':1,'labels':[]}
+
+
+def test_all_additions_checked_before_any_mutation(key_file):
+    api=API(key_file,{'/issues/1':{'number':1},'/labels/bug':{'id':1,'name':'bug'}})
+    with pytest.raises(ClientError):api.run('issue_labels_add',{'number':1,'labels':['bug','missing']})
+    assert any(r.url.path.endswith('/labels/missing') for r in api.calls)
+    assert not any(r.method=='POST' and '/issues/' in r.url.path for r in api.calls)
+
+
+def test_label_response_secret_redaction_and_percent_literal_path(key_file):
+    api=API(key_file,{'/issues/1':{'number':1},('DELETE','/issues/1/labels/%2E'):[{'id':1,'name':'secret-token'}]})
+    assert api.run('issue_label_remove',{'number':1,'label':'%2E'})=={'number':1,'labels':[{'id':1,'name':'[REDACTED]'}]}
+    assert api.calls[-1].url.raw_path.endswith(b'/labels/%252E')
