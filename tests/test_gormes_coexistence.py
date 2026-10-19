@@ -34,6 +34,19 @@ def test_isolated_gormes_receipt():
     assert receipt['stages']['docker']['same_container_reused']
 
     source = Path(__file__).resolve().parents[1]
-    expected = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((source / 'hermes_github_app').glob('*.py'))}
+    expected = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted([*(source / 'hermes_github_app').glob('*.py'), source / '__init__.py', source / 'plugin.yaml'])}
     assert receipt['product_hashes'] == expected
     assert receipt['probe_sha256'] == hashlib.sha256((source / 'tools/gormes_coexistence_probe.py').read_bytes()).hexdigest()
+
+    assert receipt['stages']['directory_entrypoint']
+    assert receipt['stages']['hooks_preserved']
+    assert candidate['unknown_tool_still_blocked'] and candidate['preserved_old_permissions']
+    assert receipt['stages']['docker']['cross_process_reuse_tested'] is False
+
+
+def test_directory_manifest_matches_action_catalog():
+    from ruamel.yaml import YAML
+    source = Path(__file__).resolve().parents[1]
+    manifest = YAML(typ='safe').load((source / 'plugin.yaml').read_text())
+    assert len(manifest['provides_tools']) == len(ACTIONS)
+    assert set(manifest['provides_tools']) == set(ACTIONS)

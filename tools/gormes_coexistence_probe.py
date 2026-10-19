@@ -83,13 +83,16 @@ def main(args):
     import model_tools
     from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
     from tools.registry import registry
-    from hermes_github_app import plugin
     from hermes_github_app.actions import ACTIONS
-    from hermes_github_app.client import GitHubClient
+    directory_entry = load_directory(source, 'probe_github_entry')
+    plugin = sys.modules['probe_github_entry.hermes_github_app.plugin']
+    GitHubClient = plugin.GitHubClient
+    assert set(yaml.load((source / 'plugin.yaml').read_text())['provides_tools']) == set(ACTIONS)
 
     report = {'schema': 1, 'production_changed': False, 'github_network': False,
               'probe_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-              'product_hashes': {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((source / 'hermes_github_app').glob('*.py'))},
+              'product_hashes': {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted([*(source / 'hermes_github_app').glob('*.py'), source / '__init__.py', source / 'plugin.yaml'])},
+              'evidence_classification': {'production_changed': 'test_design_no_production_writes', 'github_network': 'test_design_mock_transport'},
               'child_execution': 'deterministic_lifecycle', 'stages': {}}
     manager = get_plugin_manager()
     contexts = []
@@ -137,17 +140,20 @@ def main(args):
         original_allowed = frozenset(security.ALLOWED)
         report['installed_hashes'] = {name: hashlib.sha256((installed / name / '__init__.py').read_bytes()).hexdigest()
             for name in ['gormes-sandbox-policy', 'gormes-request-provenance', 'hermes-orpheus']}
-        plugin.register(context('hermes-github-app'))
+        directory_entry.register(context('hermes-github-app'))
+        report['stages']['directory_entrypoint'] = True
         assert len(manager._hooks.get('pre_tool_call', [])) == hook_count
         assert set(ACTIONS) <= set(registry._merged_tools()), 'registered-tools'
         def dispatch(name, params):
             result = model_tools.handle_function_call(name, params, task_id='coexist-probe', session_id='coexist-probe')
             return json.loads(result) if isinstance(result, str) else result
         before = len(calls)
-        assert security.check(tool_name='repo_get', args={'repo': 'fixture/demo'}) is not None
+        expected_block = security.check(tool_name='repo_get', args={'repo': 'fixture/demo'})
+        assert expected_block is not None
         baseline = dispatch('repo_get', {'repo': 'fixture/demo'})
         assert len(calls) == before
         assert not baseline.get('ok', False)
+        assert expected_block['message'] in json.dumps(baseline)
         report['stages']['unchanged_production_hook'] = {'new_tool_blocked': True, 'upstream_calls': 0}
 
         # Explicit candidate ONLY: extend this subprocess's module object. The
@@ -156,7 +162,7 @@ def main(args):
         assert original_allowed <= security.ALLOWED
         assert security.ALLOWED - original_allowed == set(ACTIONS) - original_allowed
         before = len(calls)
-        denied = dispatch('repo_get', {'repo': 'excluded/demo'})
+        denied = dispatch('repo_get', {'repo': 'unselected/demo'})
         assert denied.get('code') == 'policy_denied' and len(calls) == before
         allowed = dispatch('repo_get', {'repo': 'fixture/demo'})
         assert allowed.get('ok') is True and len(calls) > before
