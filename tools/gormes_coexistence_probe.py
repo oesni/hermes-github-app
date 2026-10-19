@@ -88,7 +88,7 @@ def main(args):
     directory_entry = load_directory(source, 'probe_github_entry')
     plugin = sys.modules['probe_github_entry.hermes_github_app.plugin']
     GitHubClient = plugin.GitHubClient
-    assert set(yaml.load((source / 'plugin.yaml').read_text())['provides_tools']) == set(ACTIONS)
+    assert set(yaml.load((source / 'plugin.yaml').read_text())['provides_tools']) == {'github_' + action for action in ACTIONS}
 
     report = {'schema': 1, 'production_changed': False, 'github_network': False,
               'probe_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -144,14 +144,16 @@ def main(args):
         directory_entry.register(context('hermes-github-app'))
         report['stages']['directory_entrypoint'] = True
         assert len(manager._hooks.get('pre_tool_call', [])) == hook_count
-        assert set(ACTIONS) <= set(registry._merged_tools()), 'registered-tools'
+        public_tools = {'github_' + action for action in ACTIONS}
+        assert public_tools <= set(registry._merged_tools())
+        assert not set(ACTIONS) & set(registry._merged_tools()), 'registered-tools'
         def dispatch(name, params):
             result = model_tools.handle_function_call(name, params, task_id='coexist-probe', session_id='coexist-probe')
             return json.loads(result) if isinstance(result, str) else result
         before = len(calls)
-        expected_block = security.check(tool_name='repo_get', args={'repo': 'fixture/demo'})
+        expected_block = security.check(tool_name='github_repo_get', args={'repo': 'fixture/demo'})
         assert expected_block is not None
-        baseline = dispatch('repo_get', {'repo': 'fixture/demo'})
+        baseline = dispatch('github_repo_get', {'repo': 'fixture/demo'})
         assert len(calls) == before
         assert not baseline.get('ok', False)
         assert expected_block['message'] in json.dumps(baseline)
@@ -159,13 +161,13 @@ def main(args):
 
         # Explicit candidate ONLY: extend this subprocess's module object. The
         # installed file and integrity manifest stay byte-for-byte unchanged.
-        security.ALLOWED = add_candidate_actions(original_allowed, ACTIONS)
+        security.ALLOWED = add_candidate_actions(original_allowed, public_tools)
         assert original_allowed <= security.ALLOWED
-        assert security.ALLOWED - original_allowed == set(ACTIONS) - original_allowed
+        assert security.ALLOWED - original_allowed == public_tools - original_allowed
         before = len(calls)
-        denied = dispatch('repo_get', {'repo': 'unselected/demo'})
+        denied = dispatch('github_repo_get', {'repo': 'unselected/demo'})
         assert denied.get('code') == 'policy_denied' and len(calls) == before
-        allowed = dispatch('repo_get', {'repo': 'fixture/demo'})
+        allowed = dispatch('github_repo_get', {'repo': 'fixture/demo'})
         assert allowed.get('ok') is True and len(calls) > before
         encoded = json.dumps(allowed)
         assert dummy_token not in encoded and key_bytes.decode() not in encoded

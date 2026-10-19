@@ -78,7 +78,7 @@ def register(ctx):
     for action in ACTIONS:
         handler = make_handler(action)
         schema = tool_schema(action)
-        ctx.register_tool(name=action, toolset='github_app', handler=handler,
+        ctx.register_tool(name=schema['name'], toolset='github_app', handler=handler,
                           description=schema['description'], schema=schema)
     if callable(getattr(ctx, 'on_unload', None)):
         ctx.on_unload(close)
@@ -117,7 +117,7 @@ def tool_schema(action):
         description += ' Add an inline diff comment to an open PR whose head matched commit_id when checked. Optional start_line/start_side must be paired on the same side.'
     if action == 'pr_merge':
         description += ' Requires explicit policy allowance and the expected PR head SHA; GitHub protections apply.'
-    return {'name': action, 'description': description, 'parameters': {
+    return {'name': 'github_' + action, 'description': description, 'parameters': {
         'type': 'object', 'additionalProperties': False,
         'properties': properties, 'required': ['repo', *sorted(required)],
     }}

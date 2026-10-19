@@ -88,7 +88,7 @@ def test_handler_rechecks_protected_files_and_ignores_other_host_surfaces(config
     ctx.register_middleware.assert_not_called()
     ctx.register_hook.assert_not_called()
     handlers = {call.kwargs['name']: call.kwargs['handler'] for call in ctx.register_tool.call_args_list}
-    handler = handlers['repo_get']
+    handler = handlers['github_repo_get']
     assert json.loads(handler({'repo': 'acme/demo'}, task_id='task', session_id='session'))['ok']
     assert service.execute.call_args.kwargs['recheck_isolation'].__func__ is HostBoundary.check
     configuration.chmod(0o644)
@@ -117,7 +117,7 @@ def test_missing_key_and_edited_config_do_not_reload_or_run(configuration, monke
     monkeypatch.setattr(plugin, 'GitHubService', Mock(return_value=service))
     ctx = Mock()
     plugin.register(ctx)
-    handler = {call.kwargs['name']: call.kwargs['handler'] for call in ctx.register_tool.call_args_list}['repo_get']
+    handler = {call.kwargs['name']: call.kwargs['handler'] for call in ctx.register_tool.call_args_list}['github_repo_get']
     assert calls['parse'] == 1
     configuration.write_text(configuration.read_text().replace('default_access: read', 'default_access: write'))
     assert json.loads(handler({'repo': 'acme/demo'}))['ok']
@@ -184,40 +184,41 @@ plugin.GitHubClient = Mock()
 plugin.GitHubService = Mock(return_value=service)
 ctx = PluginContext(PluginManifest(name="hermes-github-app"), manager)
 plugin.register(ctx)
-assert registry.get_entry("repo_get") is not None
+assert registry.get_entry("github_repo_get") is not None
 assert registry.get_entry("github_app_action") is None
 from hermes_github_app.actions import ACTIONS
 assert len(ACTIONS) == 15
-assert all(registry.get_entry(name) is not None for name in ACTIONS)
+assert all(registry.get_entry("github_" + name) is not None for name in ACTIONS)
+assert all(registry.get_entry(name) is None for name in ACTIONS)
 inline = {"repo": "acme/demo", "number": 1, "body": "Review", "commit_id": "a" * 40,
           "path": "src.py", "line": 8, "side": "RIGHT", "start_line": 4, "start_side": "RIGHT"}
 for field in ("line", "start_line"):
     for value in ("4", True):
         before = service.execute.call_count
         bad = dict(inline, **{field: value})
-        rejected = model_tools.handle_function_call("pr_review_comment", bad, task_id="default", session_id="native-test", tool_call_id="bad-inline-" + field)
+        rejected = model_tools.handle_function_call("github_pr_review_comment", bad, task_id="default", session_id="native-test", tool_call_id="bad-inline-" + field)
         assert json.loads(rejected)["code"] == "invalid_arguments", rejected
         assert service.execute.call_count == before
-accepted = model_tools.handle_function_call("pr_review_comment", inline, task_id="default", session_id="native-test", tool_call_id="good-inline")
+accepted = model_tools.handle_function_call("github_pr_review_comment", inline, task_id="default", session_id="native-test", tool_call_id="good-inline")
 assert json.loads(accepted)["ok"], accepted
 assert service.execute.call_args.args == ("pr_review_comment", "acme/demo", {k: v for k, v in inline.items() if k != "repo"})
 blocked.add("execute_code")
 denied = model_tools.handle_function_call("execute_code", {"code": "1"}, task_id="default", session_id="native-test", tool_call_id="blocked-code")
 assert "existing security hook" in denied
 args = {"repo": "acme/demo"}
-result = json.loads(model_tools.handle_function_call("repo_get", args, task_id="default", session_id="native-test", tool_call_id="call-1"))
+result = json.loads(model_tools.handle_function_call("github_repo_get", args, task_id="default", session_id="native-test", tool_call_id="call-1"))
 assert result["ok"], result
-for tool, bad in [("issue_get", {"repo": "acme/demo", "number": "42"}), ("pr_create", {"repo": "acme/demo", "title": "t", "base": "main", "head": "feature", "draft": "false"}), ("repo_get", {"repo": "acme/demo", "action": "repo_get"})]:
+for tool, bad in [("github_issue_get", {"repo": "acme/demo", "number": "42"}), ("github_pr_create", {"repo": "acme/demo", "title": "t", "base": "main", "head": "feature", "draft": "false"}), ("github_repo_get", {"repo": "acme/demo", "action": "repo_get"})]:
     before = service.execute.call_count
     rejected = model_tools.handle_function_call(tool, bad, task_id="default", session_id="native-test", tool_call_id="bad-" + tool)
     assert json.loads(rejected)["code"] == "invalid_arguments", rejected
     assert service.execute.call_count == before
-accepted = model_tools.handle_function_call("issue_get", {"repo": "acme/demo", "number": 42}, task_id="default", session_id="native-test", tool_call_id="good-int")
+accepted = model_tools.handle_function_call("github_issue_get", {"repo": "acme/demo", "number": 42}, task_id="default", session_id="native-test", tool_call_id="good-int")
 assert json.loads(accepted)["ok"], accepted
 assert service.execute.call_args.args == ("issue_get", "acme/demo", {"number": 42})
-blocked.add("repo_get")
+blocked.add("github_repo_get")
 before = service.execute.call_count
-hooked = model_tools.handle_function_call("repo_get", args, task_id="default", session_id="native-test", tool_call_id="hook-block")
+hooked = model_tools.handle_function_call("github_repo_get", args, task_id="default", session_id="native-test", tool_call_id="hook-block")
 assert "existing security hook" in hooked
 assert service.execute.call_count == before
 print("Public registration kept strict arguments and an existing security hook")
@@ -234,17 +235,20 @@ def test_fifteen_flat_tools_are_registered_with_distinct_handlers(configuration,
     ctx = Mock()
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
-    assert set(registrations) == set(ACTIONS)
+    assert set(registrations) == {'github_' + action for action in ACTIONS}
     assert len({id(item['handler']) for item in registrations.values()}) == 15
-    for action, item in registrations.items():
+    for action in ACTIONS:
+        item = registrations['github_' + action]
+        assert item['schema']['name'] == 'github_' + action
+        assert item['toolset'] == 'github_app'
         schema = item['schema']['parameters']
         required, optional = PARAMETER_FIELDS[action]
         assert set(schema['properties']) == {'repo', *required, *optional}
         assert set(schema['required']) == {'repo', *required}
         assert schema['additionalProperties'] is False
         assert 'action' not in schema['properties'] and 'params' not in schema['properties']
-    assert registrations['issue_get']['schema']['parameters']['properties']['number'] == {'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': 2**31-1}]}
-    assert registrations['pr_create']['schema']['parameters']['properties']['draft'] == {'anyOf': [{'type': 'boolean'}]}
+    assert registrations['github_issue_get']['schema']['parameters']['properties']['number'] == {'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': 2**31-1}]}
+    assert registrations['github_pr_create']['schema']['parameters']['properties']['draft'] == {'anyOf': [{'type': 'boolean'}]}
 
 
 @pytest.mark.parametrize('failure, expected', [
@@ -282,8 +286,8 @@ def test_version_one_registers_inline_tool_with_strict_flat_schema(configuration
     service=Mock();monkeypatch.setattr(plugin,'GitHubService',Mock(return_value=service))
     ctx=Mock();plugin.register(ctx)
     registered={call.kwargs['name']:call.kwargs for call in ctx.register_tool.call_args_list}
-    assert set(registered)==set(ACTIONS)
-    item=registered['pr_review_comment'];schema=item['schema']['parameters']
+    assert set(registered)=={'github_' + action for action in ACTIONS}
+    item=registered['github_pr_review_comment'];schema=item['schema']['parameters']
     assert set(schema['required'])=={'repo','number','body','commit_id','path','line','side'}
     for name in ('line','start_line'):
         assert schema['properties'][name]=={'anyOf':[{'type':'integer','minimum':1,'maximum':2**31-1}]}
@@ -294,3 +298,24 @@ def test_version_one_registers_inline_tool_with_strict_flat_schema(configuration
     result=json.loads(item['handler'](args))
     assert result['code']=='invalid_arguments'
     service.execute.assert_not_called()
+
+
+def test_prefixed_handlers_apply_unprefixed_policy_before_client_access(configuration, monkeypatch):
+    configuration.write_text(configuration.read_text() + '  allow_actions: [issue_comment]\n  deny_actions: [pr_merge]\n')
+    client = Mock()
+    session = client.session.return_value
+    session.repo = 'acme/demo'
+    session.execute.return_value = {'id': 7}
+    monkeypatch.setattr(plugin, 'GitHubClient', Mock(return_value=client))
+    ctx = Mock()
+    plugin.register(ctx)
+    handlers = {call.kwargs['name']: call.kwargs['handler'] for call in ctx.register_tool.call_args_list}
+    assert json.loads(handlers['github_issue_comment']({'repo': 'acme/demo', 'number': 1, 'body': 'Comment'}))['ok']
+    assert session.execute.call_args.args[0] == 'issue_comment'
+    client.session.reset_mock()
+    for tool, args in [
+        ('github_issue_comment', {'repo': 'excluded/demo', 'number': 1, 'body': 'Comment'}),
+        ('github_pr_merge', {'repo': 'acme/demo', 'number': 1, 'expected_head_sha': 'a' * 40, 'merge_method': 'squash'}),
+    ]:
+        assert json.loads(handlers[tool](args))['code'] == 'policy_denied'
+    client.session.assert_not_called()
