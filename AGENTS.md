@@ -6,7 +6,7 @@
 - Read `docs/spec/github-app-configuration.md` before changing behavior. It is the version-one configuration and runtime contract; preserve its explicit limitations and prerequisites. Do not silently expand a frozen action catalog or profile.
 - Keep GitHub App keys, JWTs, installation tokens, configuration, and authorization decisions on the trusted host. Never expose credentials through agent arguments, results, errors, logs, forwarded environments, or sandbox mounts.
 - Enforce repository selection, exclusions, action policy, argument validation, canonical target checks, and operation prerequisites on the host before mutation. Explicit denials win over grants. Merge uses the same explicit action policy and GitHub protection checks; do not add an unsolicited approval adapter or platform-specific authorization workflow.
-- Support only runtime surfaces with an explicit, verified isolation contract. Refuse unknown or unverifiable contexts instead of falling back to local execution or weaker checks.
+- Register GitHub tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Do not pin a Hermes source revision, and do not restrict the host's other tools, hooks, delegation, or Docker container reuse. Keep credentials and repository policy inside this plugin, and recheck the protected configuration and key files before every operation.
 - Preserve the complete startup snapshot and per-call isolation rechecks. Do not add implicit hot reload or credential fallback.
 
 ## Development and verification
