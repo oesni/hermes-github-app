@@ -18,6 +18,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import secrets
 import subprocess
 import sys
 import time
@@ -110,7 +111,7 @@ def main(args):
     config.chmod(0o600)
     os.environ['HERMES_GITHUB_APP_CONFIG'] = str(config)
     calls = []
-    dummy_token = 'DUMMY-INSTALLATION-TOKEN-NOT-A-CREDENTIAL'
+    dummy_token = secrets.token_urlsafe(32)
     def transport(request):
         calls.append((request.method, request.url.path))
         assert request.url.host == 'api.github.com'
