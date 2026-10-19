@@ -450,3 +450,15 @@ def test_label_response_secret_redaction_and_percent_literal_path(key_file):
     api=API(key_file,{'/issues/1':{'number':1},('DELETE','/issues/1/labels/%2E'):[{'id':1,'name':'secret-token'}]})
     assert api.run('issue_label_remove',{'number':1,'label':'%2E'})=={'number':1,'labels':[{'id':1,'name':'[REDACTED]'}]}
     assert api.calls[-1].url.raw_path.endswith(b'/labels/%252E')
+
+
+@pytest.mark.parametrize('name',['.','..','x'*51])
+@pytest.mark.parametrize('action,params,method,path',[
+    ('issue_labels_add',{'number':1,'labels':['bug']},'POST','/issues/1/labels'),
+    ('issue_label_remove',{'number':1,'label':'bug'},'DELETE','/issues/1/labels/bug'),
+])
+def test_unrelated_labels_outside_input_rules_do_not_invalidate_success(key_file,name,action,params,method,path):
+    api=API(key_file,{'/issues/1':{'number':1},'/labels/bug':{'id':1,'name':'bug'},
+        (method,path):[{'id':9,'name':name,'description':'hidden'}]})
+    assert api.run(action,params)=={'number':1,'labels':[{'id':9,'name':name}]}
+    assert sum(r.method==method and r.url.path.endswith(path) for r in api.calls)==1

@@ -313,7 +313,6 @@ class Session:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 
     def issue_labels(self, action, params, request):
-        from .actions import valid_label
         target = self.target(params['number'], False)
         if type(target.get('number')) is not int:
             raise ClientError('GitHub target mismatch.', 'target_changed')
@@ -333,7 +332,9 @@ class Session:
             for label in response.data:
                 if not isinstance(label, dict) or type(label.get('id')) is not int or label['id'] <= 0:
                     raise ValueError()
-                labels.append({'id': label['id'], 'name': valid_label(label.get('name'))})
+                if not isinstance(label.get('name'), str) or not label['name']:
+                    raise ValueError()
+                labels.append({'id': label['id'], 'name': label['name']})
             return self.safe({'number': params['number'], 'labels': labels})
         except BaseException:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
