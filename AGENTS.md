@@ -2,6 +2,7 @@
 
 ## Contract and implementation
 
+- Native tool names and configuration action names are the same fourteen unprefixed snake_case identifiers (for example, `pr_merge` and `issue_comment`). Reject legacy dotted names; do not add aliases or a generic dispatcher tool.
 - Read `docs/spec/github-app-configuration.md` before changing behavior. It is the version-one configuration and runtime contract; preserve its explicit limitations and prerequisites. Do not silently expand a frozen action catalog or profile.
 - Keep GitHub App keys, JWTs, installation tokens, configuration, and authorization decisions on the trusted host. Never expose credentials through agent arguments, results, errors, logs, forwarded environments, or sandbox mounts.
 - Enforce repository selection, exclusions, action policy, argument validation, canonical target checks, and operation prerequisites on the host before mutation. Explicit denials win over grants; approval is separate from capability.

@@ -17,7 +17,7 @@ policy:
     mode: all
     exclude: [acme/private]
   default_access: write
-  deny_actions: [pulls.merge]
+  deny_actions: [pr_merge]
   repository_rules:
     acme/archive:
       access: read
@@ -36,11 +36,11 @@ For each selected repository:
 
 | Profile | Actions |
 | --- | --- |
-| read | `repo.get`, `contents.read`, `issues.list`, `issues.get`, `issues.comments.list`, `pulls.list`, `pulls.get`, `pulls.comments.list` |
-| write | All read actions plus `issues.create`, `issues.comment`, `pulls.create`, `pulls.comment`, `branches.create` |
-| explicit allowance only | `pulls.merge` — separate human confirmation required |
+| read | `repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `pr_list`, `pr_get`, `pr_comments_list` |
+| write | All read actions plus `issue_create`, `issue_comment`, `pr_create`, `pr_comment`, `branch_create` |
+| explicit allowance only | `pr_merge` — separate human confirmation required |
 
-`github_app_action` takes exactly `{action, repo, params}`. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, file write, git push/clone, review/diff API, PR edit/delete, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. `contents.read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
+Each operation is a separate native tool with the same name as its policy action. Arguments are flat: for example, `issue_comment` takes `{repo, number, body}` and `pr_merge` takes `{repo, number, expected_head_sha, merge_method}`. There is no generic action dispatcher or legacy operation alias. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, file write, git push/clone, review/diff API, PR edit/delete, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. `contents_read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
 
 ## Supported Hermes host boundary
 
@@ -50,7 +50,7 @@ The exhaustive supported agent-facing surfaces are:
 
 - Native `terminal` executed by Docker and `process` limited to processes owned by the calling sandbox. Any reachable host process entry refuses operation.
 - Native `read_file`, `write_file`, `patch`, and `search_files` using the same Docker backend.
-- This plugin's `github_app_action`.
+- This plugin's fourteen individual tools listed above.
 
 Interactive CLI roots and live gateway root agents are supported when the host exposes their actual agent/session binding. Unregistered standalone agents, delegated contexts without that binding, `execute_code`, delegation/Orpheus, MCP, tool-search bridges, host hooks, skill management/execution tools, and other native/plugin tools are unsupported. Their presence in the calling agent's enabled tools refuses GitHub calls. This is a deliberate published compatibility boundary, not a claim that arbitrary tools have been audited. Agent shell scripts executed by the supported terminal remain inside Docker.
 
@@ -79,7 +79,7 @@ Keep config/key files outside every sandbox/mount. Accepted modes are Hermes-own
 
 ## Human merge confirmation
 
-Both bundled policy examples deny merges globally. Explicitly allowing `pulls.merge` still does not authorize one. A separately configured `merge_approval.approvers` list must contain stable human Discord user IDs; see [merge-approvers.yaml](examples/merge-approvers.yaml). Empty lists leave merge unavailable. Bot accounts, usernames, roles, and other platforms cannot approve.
+Both bundled policy examples deny merges globally. Explicitly allowing `pr_merge` still does not authorize one. A separately configured `merge_approval.approvers` list must contain stable human Discord user IDs; see [merge-approvers.yaml](examples/merge-approvers.yaml). Empty lists leave merge unavailable. Bot accounts, usernames, roles, and other platforms cannot approve.
 
 The adapter uses the existing running Hermes Discord client's authenticated interactions. It sends host-owned DMs with Approve/Deny buttons to configured approvers; it never starts another bot or reads its token. Message/channel bindings and actor identity are checked. Ordinary chat messages, agent arguments, and forged approval flags cannot approve. CLI-originated calls can use this adapter only when a live gateway client exists in that host process; otherwise merge returns `approval_required_unavailable`.
 

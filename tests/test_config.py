@@ -24,7 +24,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.version, 1)
         self.assertEqual(cfg.auth.app_id, 12345)
         self.assertEqual(cfg.merge_approval.approvers, ())
-        self.assertEqual(cfg.policy.authorize("acme/a", "repo.get"), "acme/a")
+        self.assertEqual(cfg.policy.authorize("acme/a", "repo_get"), "acme/a")
         explicit = parse_config(BASE + "  allow_actions: []\n  deny_actions: []\n  repository_rules: {}\nmerge_approval: {approvers: []}\n")
         self.assertEqual(cfg, explicit)
 
@@ -79,7 +79,7 @@ class ConfigTests(unittest.TestCase):
             self.assertNotIn("sensitive-secret", str(caught.exception))
 
     def test_unknown_nested_keys_null_and_old_schema_rejected(self):
-        cases = [BASE + 'merge_approval: {wrong: []}\n', BASE.replace("  app_id: 12345", "  app_id: 12345\n  token: forbidden"), BASE.replace("  default_access: read", "  default_actions: [repo.get]"), BASE + '  repository_rules: {acme/a: {access: null}}\n', BASE.replace("    exclude: []", "    exclude: []\n    typo: []")]
+        cases = [BASE + 'merge_approval: {wrong: []}\n', BASE.replace("  app_id: 12345", "  app_id: 12345\n  token: forbidden"), BASE.replace("  default_access: read", "  default_actions: [repo_get]"), BASE + '  repository_rules: {acme/a: {access: null}}\n', BASE.replace("    exclude: []", "    exclude: []\n    typo: []")]
         for case in cases:
             with self.assertRaises(ConfigError):
                 parse_config(case)
@@ -89,20 +89,20 @@ class ConfigTests(unittest.TestCase):
         blocks = re.findall(r"    ```yaml\n(.*?)    ```", spec, flags=re.S)
         configs = [parse_config("\n".join(line[4:] for line in block.splitlines())) for block in blocks[:2]]
         decisions = [
-            (0, "Acme/Website", "contents.read", True),
-            (0, "other/demo", "repo.get", False),
-            (0, "acme/payroll", "issues.comment", False),
-            (0, "acme/website", "issues.comment", True),
-            (0, "acme/website", "issues.create", False),
-            (0, "ACME/SUPPORT", "branches.create", True),
-            (0, "acme/support", "pulls.merge", False),
-            (0, "acme/archive", "issues.comment", False),
-            (0, "acme/inherits", "issues.comment", True),
-            (1, "other/demo", "issues.create", True),
-            (1, "acme/archive", "issues.create", False),
-            (1, "acme/support", "branches.create", False),
-            (1, "acme/frozen", "repo.get", False),
-            (1, "secret-org/demo", "issues.get", False),
+            (0, "Acme/Website", "contents_read", True),
+            (0, "other/demo", "repo_get", False),
+            (0, "acme/payroll", "issue_comment", False),
+            (0, "acme/website", "issue_comment", True),
+            (0, "acme/website", "issue_create", False),
+            (0, "ACME/SUPPORT", "branch_create", True),
+            (0, "acme/support", "pr_merge", False),
+            (0, "acme/archive", "issue_comment", False),
+            (0, "acme/inherits", "issue_comment", True),
+            (1, "other/demo", "issue_create", True),
+            (1, "acme/archive", "issue_create", False),
+            (1, "acme/support", "branch_create", False),
+            (1, "acme/frozen", "repo_get", False),
+            (1, "secret-org/demo", "issue_get", False),
         ]
         for example, repo, action, expected in decisions:
             with self.subTest(example=example, repo=repo, action=action):
@@ -114,8 +114,16 @@ class ConfigTests(unittest.TestCase):
         # Decision 15 reaches the client: the policy grants the action, and the
         # client's issue/PR distinction must refuse an issue action on a PR.
         for cfg in configs:
-            cfg.policy.authorize("acme/support", "issues.comment")
+            cfg.policy.authorize("acme/support", "issue_comment")
         # Decision 16 grants merge capability, but has no authorized approvers.
-        cfg = parse_config(BASE + "  repository_rules: {acme/support: {allow_actions: [pulls.merge]}}\n")
-        cfg.policy.authorize("acme/support", "pulls.merge")
+        cfg = parse_config(BASE + "  repository_rules: {acme/support: {allow_actions: [pr_merge]}}\n")
+        cfg.policy.authorize("acme/support", "pr_merge")
         self.assertEqual(cfg.merge_approval.approvers, ())
+
+    def test_legacy_dotted_actions_rejected_in_every_exception_list(self):
+        old_names = ["repo.get", "contents.read", "issues.list", "issues.get", "issues.comments.list", "issues.create", "issues.comment", "pulls.list", "pulls.get", "pulls.comments.list", "pulls.create", "pulls.comment", "branches.create", "pulls.merge"]
+        for action in old_names:
+            for field in ["allow_actions", "deny_actions"]:
+                for block in [f"  {field}: [{action}]\n", f"  repository_rules: {{acme/a: {{{field}: [{action}]}}}}\n"]:
+                    with self.subTest(action=action, field=field, block=block), self.assertRaises(ConfigError):
+                        parse_config(BASE + block)

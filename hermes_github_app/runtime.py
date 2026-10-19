@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 import sys
 import threading
+from .actions import ACTIONS
 from .isolation import IsolationError, _guard_isolation
 
 _CURRENT_CALL = ContextVar('github_app_host_call', default=None)
@@ -44,7 +45,7 @@ class HermesRuntime:
         self.manager = ctx._manager
         self.config_path, self.key_path = config_path, key_path
         self.closed = False
-        self.handler = None
+        self.handlers = {}
         self._fingerprints = json.loads(Path(__file__).with_name('compatibility.json').read_text())
 
     def check_configuration(self):
@@ -87,14 +88,14 @@ class HermesRuntime:
     def check_agent(self, agent):
         from tools.registry import registry
         names = agent.valid_tool_names
-        if not isinstance(names, set) or not names or not names <= {*SUPPORTED_TOOLS, 'github_app_action'}:
+        if not isinstance(names, set) or not names or not names <= {*SUPPORTED_TOOLS, *ACTIONS}:
             raise IsolationError('Calling context exposes unsupported tools')
         for name in names:
             entry = registry.get_entry(name)
             if entry is None:
                 raise IsolationError('Cannot verify enabled tool')
-            if name == 'github_app_action':
-                if self.handler is not None and entry.handler is not self.handler:
+            if name in ACTIONS:
+                if entry.handler is not self.handlers.get(name):
                     raise IsolationError('GitHub tool handler was replaced')
             else:
                 module, function = SUPPORTED_TOOLS[name]
@@ -114,7 +115,7 @@ class HermesRuntime:
             self.check_agent(call.agent)
 
     def middleware(self, *, tool_name, args, next_call, session_id='', task_id='', tool_call_id='', **kwargs):
-        if tool_name not in {*SUPPORTED_TOOLS, 'github_app_action'}:
+        if tool_name not in {*SUPPORTED_TOOLS, *ACTIONS}:
             return json.dumps({'ok': False, 'error': 'isolation_refused'})
         try:
             if not all(isinstance(v, str) and v for v in (session_id, task_id, tool_call_id)):
@@ -159,7 +160,7 @@ class HermesRuntime:
     def pre_tool(self, tool_name=None, args=None, **kwargs):
         # Hermes emits this before intercepted tools as well as registry tools.
         name = tool_name or kwargs.get('tool') or kwargs.get('name')
-        if name not in {*SUPPORTED_TOOLS, 'github_app_action'}:
+        if name not in {*SUPPORTED_TOOLS, *ACTIONS}:
             return {'action': 'block', 'message': 'Unsupported tool surface for GitHub App isolation'}
         return None
 

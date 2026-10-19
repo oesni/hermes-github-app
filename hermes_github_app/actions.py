@@ -1,5 +1,6 @@
 """Frozen version-one action catalog and strict, credential-free arguments."""
 from dataclasses import dataclass
+from types import MappingProxyType
 import re
 import unicodedata
 from urllib.parse import quote
@@ -29,23 +30,23 @@ class Request:
 
 
 ACTIONS = {
-    "repo.get": ActionSpec("metadata", "read"),
-    "contents.read": ActionSpec("contents", "read"),
-    "issues.list": ActionSpec("issues", "read"),
-    "issues.get": ActionSpec("issues", "read"),
-    "issues.comments.list": ActionSpec("issues", "read"),
-    "issues.create": ActionSpec("issues", "write"),
-    "issues.comment": ActionSpec("issues", "write"),
-    "pulls.list": ActionSpec("pull_requests", "read"),
-    "pulls.get": ActionSpec("pull_requests", "read"),
-    "pulls.comments.list": ActionSpec("pull_requests", "read"),
-    "pulls.create": ActionSpec("pull_requests", "write", (("contents", "read"),)),
-    "pulls.comment": ActionSpec("pull_requests", "write"),
-    "branches.create": ActionSpec("contents", "write"),
-    "pulls.merge": ActionSpec("contents", "write", (("pull_requests", "read"),)),
+    "repo_get": ActionSpec("metadata", "read"),
+    "contents_read": ActionSpec("contents", "read"),
+    "issue_list": ActionSpec("issues", "read"),
+    "issue_get": ActionSpec("issues", "read"),
+    "issue_comments_list": ActionSpec("issues", "read"),
+    "issue_create": ActionSpec("issues", "write"),
+    "issue_comment": ActionSpec("issues", "write"),
+    "pr_list": ActionSpec("pull_requests", "read"),
+    "pr_get": ActionSpec("pull_requests", "read"),
+    "pr_comments_list": ActionSpec("pull_requests", "read"),
+    "pr_create": ActionSpec("pull_requests", "write", (("contents", "read"),)),
+    "pr_comment": ActionSpec("pull_requests", "write"),
+    "branch_create": ActionSpec("contents", "write"),
+    "pr_merge": ActionSpec("contents", "write", (("pull_requests", "read"),)),
 }
-READ_ACTIONS = frozenset({"repo.get", "contents.read", "issues.list", "issues.get", "issues.comments.list", "pulls.list", "pulls.get", "pulls.comments.list"})
-WRITE_ACTIONS = READ_ACTIONS | {"issues.create", "issues.comment", "pulls.create", "pulls.comment", "branches.create"}
+READ_ACTIONS = frozenset({"repo_get", "contents_read", "issue_list", "issue_get", "issue_comments_list", "pr_list", "pr_get", "pr_comments_list"})
+WRITE_ACTIONS = READ_ACTIONS | {"issue_create", "issue_comment", "pr_create", "pr_comment", "branch_create"}
 
 
 def canonical_repo(repo: str) -> str:
@@ -96,22 +97,27 @@ def valid_ref(value, name="ref", branch=False):
 
 
 _SCHEMAS = {
-    "repo.get": (set(), set()),
-    "contents.read": ({"path"}, {"ref"}),
-    "issues.list": (set(), {"state", "page", "per_page"}),
-    "issues.get": ({"number"}, set()),
-    "issues.comments.list": ({"number"}, {"page", "per_page"}),
-    "issues.create": ({"title"}, {"body"}),
-    "issues.comment": ({"number", "body"}, set()),
-    "pulls.list": (set(), {"state", "page", "per_page"}),
-    "pulls.get": ({"number"}, set()),
-    "pulls.comments.list": ({"number"}, {"page", "per_page"}),
-    "pulls.create": ({"title", "head", "base"}, {"body", "draft"}),
-    "pulls.comment": ({"number", "body"}, set()),
-    "branches.create": ({"branch"}, {"source_branch", "expected_source_sha", "source_commit_sha"}),
-    "pulls.merge": ({"number", "expected_head_sha", "merge_method"}, set()),
+    "repo_get": (set(), set()),
+    "contents_read": ({"path"}, {"ref"}),
+    "issue_list": (set(), {"state", "page", "per_page"}),
+    "issue_get": ({"number"}, set()),
+    "issue_comments_list": ({"number"}, {"page", "per_page"}),
+    "issue_create": ({"title"}, {"body"}),
+    "issue_comment": ({"number", "body"}, set()),
+    "pr_list": (set(), {"state", "page", "per_page"}),
+    "pr_get": ({"number"}, set()),
+    "pr_comments_list": ({"number"}, {"page", "per_page"}),
+    "pr_create": ({"title", "head", "base"}, {"body", "draft"}),
+    "pr_comment": ({"number", "body"}, set()),
+    "branch_create": ({"branch"}, {"source_branch", "expected_source_sha", "source_commit_sha"}),
+    "pr_merge": ({"number", "expected_head_sha", "merge_method"}, set()),
 }
 
+
+PARAMETER_FIELDS = MappingProxyType({
+    action: (frozenset(required), frozenset(optional))
+    for action, (required, optional) in _SCHEMAS.items()
+})
 
 def validate_params(action, params):
     """Return normalized parameters; network preconditions remain host-side."""
@@ -125,33 +131,33 @@ def validate_params(action, params):
     result = dict(params)
     if "number" in result:
         result["number"] = _integer(result["number"], "number")
-    if action.endswith(".list"):
+    if action.endswith("_list"):
         result["page"] = _integer(result.get("page", 1), "page", 10000)
         result["per_page"] = _integer(result.get("per_page", 30), "per_page", 100)
-        if action in {"issues.list", "pulls.list"}:
+        if action in {"issue_list", "pr_list"}:
             state = result.get("state", "open")
             if not isinstance(state, str) or state not in {"open", "closed", "all"}:
                 raise ActionError("invalid state")
             result["state"] = state
-    if action == "contents.read":
+    if action == "contents_read":
         path = _text(result["path"], "path", maximum=2**31, blank=True)
         if path and (path.startswith("/") or "\\" in path or any(p in {"", ".", ".."} for p in path.split("/"))):
             raise ActionError("invalid content path")
         if "ref" in result:
             result["ref"] = valid_ref(result["ref"])
-    if action in {"issues.create", "pulls.create"}:
+    if action in {"issue_create", "pr_create"}:
         result["title"] = _text(result["title"], "title", maximum=256)
         result["body"] = _text(result.get("body", ""), "body", blank=True, controls=True)
-    if action in {"issues.comment", "pulls.comment"}:
+    if action in {"issue_comment", "pr_comment"}:
         result["body"] = _text(result["body"], "body", controls=True)
-    if action == "pulls.create":
+    if action == "pr_create":
         for name in ("head", "base"):
             result[name] = valid_ref(result[name], name, branch=True)
         draft = result.get("draft", False)
         if type(draft) is not bool:
             raise ActionError("draft must be a boolean")
         result["draft"] = draft
-    if action == "branches.create":
+    if action == "branch_create":
         result["branch"] = valid_ref(result["branch"], "branch", branch=True)
         if "source_commit_sha" in result:
             if "source_branch" in result or "expected_source_sha" in result:
@@ -162,7 +168,7 @@ def validate_params(action, params):
                 raise ActionError("exactly one branch source form is required")
             result["source_branch"] = valid_ref(result["source_branch"], "source_branch", branch=True)
             result["expected_source_sha"] = valid_sha(result["expected_source_sha"], "expected_source_sha")
-    if action == "pulls.merge":
+    if action == "pr_merge":
         result["expected_head_sha"] = valid_sha(result["expected_head_sha"], "expected_head_sha")
         if not isinstance(result["merge_method"], str) or result["merge_method"] not in {"merge", "squash", "rebase"}:
             raise ActionError("invalid merge_method")
@@ -173,23 +179,23 @@ def build_request(action: str, repo: str, params: dict) -> Request:
     repo = canonical_repo(repo)
     p = validate_params(action, params)
     prefix = f"/repos/{repo}"
-    if action == "repo.get":
+    if action == "repo_get":
         return Request("GET", prefix, {}, None)
-    if action == "contents.read":
+    if action == "contents_read":
         return Request("GET", prefix + "/contents" + ("/" + quote(p["path"], safe="/") if p["path"] else ""), {"ref": p["ref"]} if "ref" in p else {}, None)
-    if action == "branches.create":
+    if action == "branch_create":
         return Request("POST", prefix + "/git/refs", {}, {"ref": "refs/heads/" + p["branch"], "sha": p.get("source_commit_sha", p.get("expected_source_sha"))})
-    if action == "pulls.merge":
+    if action == "pr_merge":
         return Request("PUT", prefix + f"/pulls/{p['number']}/merge", {}, {"sha": p["expected_head_sha"], "merge_method": p["merge_method"]})
-    resource, operation = action.split(".", 1)
-    endpoint = prefix + "/" + resource
+    resource, operation = action.split("_", 1)
+    endpoint = prefix + "/" + {"issue": "issues", "pr": "pulls"}[resource]
     if operation == "list":
         return Request("GET", endpoint, {k: p[k] for k in ("state", "page", "per_page")}, None)
     if operation == "get":
         return Request("GET", endpoint + f"/{p['number']}", {}, None)
-    if operation in {"comment", "comments.list"}:
+    if operation in {"comment", "comments_list"}:
         endpoint = prefix + f"/issues/{p['number']}/comments"
-        if operation == "comments.list":
+        if operation == "comments_list":
             return Request("GET", endpoint, {k: p[k] for k in ("page", "per_page")}, None)
         return Request("POST", endpoint, {}, {"body": p["body"]})
     return Request("POST", endpoint, {}, p)

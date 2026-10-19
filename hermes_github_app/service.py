@@ -16,12 +16,12 @@ class GitHubService:
             canonical=self.policy.authorize(repo,action)
             params=validate_params(action,params)
             request=build_request(action,canonical,params)
-            if action=='pulls.merge' and (self.approvals is None or context is None):
+            if action=='pr_merge' and (self.approvals is None or context is None):
                 raise ApprovalError('approval_required_unavailable')
             session=self.client.session(canonical,ACTIONS[action].permissions)
             # Session establishes GitHub's canonical name; policy must cover it too.
             self.policy.authorize(session.repo,action)
-            if action!='pulls.merge':
+            if action!='pr_merge':
                 return {'ok':True,'data':session.execute(action,params,request)}
             target=session.inspect_merge(params)
             def recheck():

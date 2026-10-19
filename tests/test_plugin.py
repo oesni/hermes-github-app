@@ -85,7 +85,7 @@ def test_direct_registry_bypass_refused_and_runtime_snapshot(configuration, monk
     ctx = Mock()
     plugin.register(ctx)
     handler = ctx.register_tool.call_args.kwargs['handler']
-    assert json.loads(handler({'action':'repo.get','repo':'acme/demo','params':{}}))['error']=='isolation_refused'
+    assert json.loads(handler({'repo':'acme/demo'}))['error']=='isolation_refused'
     ctx.register_middleware.assert_called_once()
 
 
@@ -118,7 +118,7 @@ from tools.registry import registry
 from hermes_github_app import plugin
 manager=get_plugin_manager()
 
-agent=SimpleNamespace(session_id="native-test",valid_tool_names={"github_app_action","terminal","read_file","write_file","patch","search_files"},_interrupt_requested=False)
+agent=SimpleNamespace(session_id="native-test",valid_tool_names={"repo_get","terminal","read_file","write_file","patch","search_files"},_interrupt_requested=False)
 manager._cli_ref=SimpleNamespace(agent=agent)
 client=Mock()
 # A fake GitHub service isolates this integration test from the separately tested transport.
@@ -131,17 +131,28 @@ import os
 ctx=PluginContext(PluginManifest(name="hermes-github-app"),manager)
 HermesRuntime(ctx,os.environ["HERMES_GITHUB_APP_CONFIG"],os.path.join(os.path.dirname(os.environ["HERMES_GITHUB_APP_CONFIG"]),"key.pem")).check()
 plugin.register(ctx)
-assert registry.get_entry("github_app_action") is not None
+assert registry.get_entry("repo_get") is not None
+assert registry.get_entry("github_app_action") is None
 definitions=model_tools.get_tool_definitions(enabled_toolsets=["terminal","file","github_app"],skip_tool_search_assembly=True)
 agent.valid_tool_names={d["function"]["name"] for d in definitions}
+from hermes_github_app.actions import ACTIONS
+assert set(ACTIONS) <= agent.valid_tool_names
 assert "process" in agent.valid_tool_names
-assert {"terminal","read_file","write_file","search_files","patch","github_app_action"} <= agent.valid_tool_names
-args={"action":"repo.get","repo":"acme/demo","params":{}}
-result=model_tools.handle_function_call("github_app_action",args,task_id="default",session_id="native-test",tool_call_id="call-1",enabled_tools=["github_app_action"])
+assert {"terminal","read_file","write_file","search_files","patch","repo_get"} <= agent.valid_tool_names
+args={"repo":"acme/demo"}
+result=model_tools.handle_function_call("repo_get",args,task_id="default",session_id="native-test",tool_call_id="call-1",enabled_tools=["repo_get"])
 assert json.loads(result)["ok"],result
 context=service.execute.call_args.kwargs["context"]
 assert context.session_id=="native-test" and not context.cancelled()
-assert json.loads(registry.dispatch("github_app_action",args))["error"]=="isolation_refused"
+for tool,bad in [("issue_get",{"repo":"acme/demo","number":"42"}), ("pr_create",{"repo":"acme/demo","title":"t","base":"main","head":"feature","draft":"false"}), ("repo_get",{"repo":"acme/demo","action":"repo_get"})]:
+    before=service.execute.call_count
+    rejected=model_tools.handle_function_call(tool,bad,task_id="default",session_id="native-test",tool_call_id="bad-"+tool,enabled_tools=list(agent.valid_tool_names))
+    assert json.loads(rejected)["error"]=="invalid_arguments",rejected
+    assert service.execute.call_count==before
+accepted=model_tools.handle_function_call("issue_get",{"repo":"acme/demo","number":42},task_id="default",session_id="native-test",tool_call_id="good-int",enabled_tools=list(agent.valid_tool_names))
+assert json.loads(accepted)["ok"],accepted
+assert service.execute.call_args.args==("issue_get","acme/demo",{"number":42})
+assert json.loads(registry.dispatch("repo_get",args))["error"]=="isolation_refused"
 # Exercise the native file-first preparation contract without creating a second
 # Docker test environment: only the environment constructor boundary is mocked.
 from tools import terminal_tool
@@ -167,7 +178,7 @@ from hermes_cli.plugins import get_pre_tool_call_block_message
 assert get_pre_tool_call_block_message("execute_code",{})
 assert not get_pre_tool_call_block_message("terminal",{})
 agent.valid_tool_names.add("execute_code")
-result=model_tools.handle_function_call("github_app_action",args,task_id="default",session_id="native-test",tool_call_id="call-2",enabled_tools=list(agent.valid_tool_names))
+result=model_tools.handle_function_call("repo_get",args,task_id="default",session_id="native-test",tool_call_id="call-2",enabled_tools=list(agent.valid_tool_names))
 assert json.loads(result)["error"]=="isolation_refused"
 agent._interrupt_requested=True
 assert context.cancelled()
@@ -179,3 +190,23 @@ print("Real native middleware/dispatch and context rejection passed")
            'TERMINAL_SANDBOX_DIR': str(tmp_path / 'sandbox')}
     result = subprocess.run([sys.executable, '-c', script, source], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_fourteen_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
+    from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
+    monkeypatch.setattr(plugin, 'GitHubClient', Mock())
+    monkeypatch.setattr(HermesRuntime, 'check', lambda *args: None)
+    ctx = Mock()
+    plugin.register(ctx)
+    registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
+    assert set(registrations) == set(ACTIONS)
+    assert len({id(item['handler']) for item in registrations.values()}) == 14
+    for action, item in registrations.items():
+        schema = item['schema']['parameters']
+        required, optional = PARAMETER_FIELDS[action]
+        assert set(schema['properties']) == {'repo', *required, *optional}
+        assert set(schema['required']) == {'repo', *required}
+        assert schema['additionalProperties'] is False
+        assert 'action' not in schema['properties'] and 'params' not in schema['properties']
+    assert registrations['issue_get']['schema']['parameters']['properties']['number'] == {'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': 2**31-1}]}
+    assert registrations['pr_create']['schema']['parameters']['properties']['draft'] == {'anyOf': [{'type': 'boolean'}]}

@@ -273,21 +273,21 @@ class Session:
         return self.safe({'merged':True,'sha':sha})
 
     def execute(self,action,params,request):
-        if action=='contents.read':result=self.contents(params)
-        elif action=='branches.create':result=self.create_branch(params)
+        if action=='contents_read':result=self.contents(params)
+        elif action=='branch_create':result=self.create_branch(params)
         else:
-            if action.endswith('comments.list') or action.endswith('.comment'):
-                self.target(params['number'],action.startswith('pulls.'))
-            if action=='pulls.create':
+            if action in {'issue_comments_list','pr_comments_list','issue_comment','pr_comment'}:
+                self.target(params['number'],action.startswith('pr_'))
+            if action=='pr_create':
                 self.branch(params['head']);self.branch(params['base'])
-            if action in {'issues.get','pulls.get'}:
-                return self.safe(self.target(params['number'],action.startswith('pulls.')))
+            if action in {'issue_get','pr_get'}:
+                return self.safe(self.target(params['number'],action.startswith('pr_')))
             response=self.request(request.method,request.path.removeprefix(self.prefix),query=request.query,body=request.body,mutation=request.method!='GET')
             result=response.data
-            if action.endswith('.list'):
+            if action.endswith('_list'):
                 if not isinstance(result,list):raise ClientError("Invalid GitHub list response.")
                 for item in result:self.check_repo(item)
-                if action=='issues.list':result=[x for x in result if 'pull_request' not in x]
+                if action=='issue_list':result=[x for x in result if 'pull_request' not in x]
                 result={'items':result,'page':params['page'],'per_page':params['per_page'],'has_more':response.has_more}
             elif isinstance(result,dict):
                 try:self.check_repo(result)

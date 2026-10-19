@@ -9,10 +9,10 @@ policy:
     exclude: [acme/payroll, secret-org/*, acme/frozen]
   default_access: write
   allow_actions: []
-  deny_actions: [pulls.merge]
+  deny_actions: [pr_merge]
   repository_rules:
     acme/archive:
       access: read
     acme/support:
-      deny_actions: [branches.create]
+      deny_actions: [branch_create]
     acme/inherits: {}

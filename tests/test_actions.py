@@ -3,7 +3,7 @@ from hermes_github_app.actions import ACTIONS, ActionError, build_request, valid
 
 
 SHA = "a" * 40
-FIXTURES = {"repo.get": {}, "contents.read": {"path": "README.md"}, "issues.list": {}, "issues.get": {"number": 1}, "issues.comments.list": {"number": 1}, "issues.create": {"title": "Report"}, "issues.comment": {"number": 1, "body": "Hello"}, "pulls.list": {}, "pulls.get": {"number": 2}, "pulls.comments.list": {"number": 2}, "pulls.create": {"title": "Change", "head": "feature/a", "base": "main"}, "pulls.comment": {"number": 2, "body": "Review"}, "branches.create": {"branch": "new", "source_commit_sha": SHA}, "pulls.merge": {"number": 1, "expected_head_sha": SHA, "merge_method": "squash"}}
+FIXTURES = {"repo_get": {}, "contents_read": {"path": "README.md"}, "issue_list": {}, "issue_get": {"number": 1}, "issue_comments_list": {"number": 1}, "issue_create": {"title": "Report"}, "issue_comment": {"number": 1, "body": "Hello"}, "pr_list": {}, "pr_get": {"number": 2}, "pr_comments_list": {"number": 2}, "pr_create": {"title": "Change", "head": "feature/a", "base": "main"}, "pr_comment": {"number": 2, "body": "Review"}, "branch_create": {"branch": "new", "source_commit_sha": SHA}, "pr_merge": {"number": 1, "expected_head_sha": SHA, "merge_method": "squash"}}
 
 
 class ActionsTests(unittest.TestCase):
@@ -18,25 +18,25 @@ class ActionsTests(unittest.TestCase):
                     build_request(action, "acme/repo", dict(params, **{override: "override"}))
 
     def test_defaults_and_comment_routes(self):
-        self.assertEqual(validate_params("issues.list", {}), {"state": "open", "page": 1, "per_page": 30})
-        self.assertEqual(validate_params("issues.create", {"title": "a"}), {"title": "a", "body": ""})
-        self.assertFalse(validate_params("pulls.create", FIXTURES["pulls.create"])["draft"])
-        for action in ["issues.comments.list", "pulls.comments.list"]:
+        self.assertEqual(validate_params("issue_list", {}), {"state": "open", "page": 1, "per_page": 30})
+        self.assertEqual(validate_params("issue_create", {"title": "a"}), {"title": "a", "body": ""})
+        self.assertFalse(validate_params("pr_create", FIXTURES["pr_create"])["draft"])
+        for action in ["issue_comments_list", "pr_comments_list"]:
             r = build_request(action, "acme/repo", {"number": 2})
             self.assertEqual(r.path, "/repos/acme/repo/issues/2/comments")
             self.assertEqual(r.query, {"page": 1, "per_page": 30})
-        r = build_request("pulls.comment", "acme/repo", {"number": 2, "body": "a\nb\tc"})
+        r = build_request("pr_comment", "acme/repo", {"number": 2, "body": "a\nb\tc"})
         self.assertEqual(r.body, {"body": "a\nb\tc"})
 
     def test_contents_safe_path_and_no_revision_expressions(self):
-        r = build_request("contents.read", "acme/repo", {"path": "dir/a?#%.txt", "ref": "feature/x"})
+        r = build_request("contents_read", "acme/repo", {"path": "dir/a?#%.txt", "ref": "feature/x"})
         self.assertEqual(r.path, "/repos/acme/repo/contents/dir/a%3F%23%25.txt")
         self.assertEqual(r.query, {"ref": "feature/x"})
-        self.assertEqual(build_request("contents.read", "acme/repo", {"path": ""}).path, "/repos/acme/repo/contents")
+        self.assertEqual(build_request("contents_read", "acme/repo", {"path": ""}).path, "/repos/acme/repo/contents")
         for path in ["/etc/passwd", "../secret", "a/../b", "a//b", "a/./b", "a\\b", "a\nheader", chr(0xD800)]:
             with self.subTest(path=path), self.assertRaises(ActionError):
-                build_request("contents.read", "acme/repo", {"path": path})
-        r = build_request("contents.read", "acme/repo", {"path": "%2e%2e/%2fsecret"})
+                build_request("contents_read", "acme/repo", {"path": path})
+        r = build_request("contents_read", "acme/repo", {"path": "%2e%2e/%2fsecret"})
         self.assertEqual(r.path, "/repos/acme/repo/contents/%252e%252e/%252fsecret")
 
     def test_git_branch_and_ref_names(self):
@@ -47,10 +47,10 @@ class ActionsTests(unittest.TestCase):
                 valid_ref(name, branch=True)
         for name in ["main~1", SHA, "a" * 64, "a:b"]:
             with self.assertRaises(ActionError):
-                build_request("contents.read", "acme/repo", {"path": "", "ref": name})
+                build_request("contents_read", "acme/repo", {"path": "", "ref": name})
         for field in ["head", "base"]:
             with self.assertRaises(ActionError):
-                build_request("pulls.create", "acme/repo", dict(FIXTURES["pulls.create"], **{field: "owner:branch"}))
+                build_request("pr_create", "acme/repo", dict(FIXTURES["pr_create"], **{field: "owner:branch"}))
 
     def test_branch_source_forms_and_sha_normalization(self):
         for length in [40, 64]:
@@ -58,32 +58,61 @@ class ActionsTests(unittest.TestCase):
         for value in ["a" * 39, "a" * 41, "g" * 40, "main", True, None]:
             with self.assertRaises(ActionError):
                 valid_sha(value)
-        r = build_request("branches.create", "acme/repo", {"branch": "new", "source_branch": "main", "expected_source_sha": SHA.upper()})
+        r = build_request("branch_create", "acme/repo", {"branch": "new", "source_branch": "main", "expected_source_sha": SHA.upper()})
         self.assertEqual(r.body, {"ref": "refs/heads/new", "sha": SHA})
         for params in [{"branch": "new"}, {"branch": "new", "source_branch": "main"}, {"branch": "new", "expected_source_sha": SHA}, {"branch": "new", "source_commit_sha": SHA, "source_branch": "main"}, {"branch": "new", "source_commit_sha": SHA, "expected_source_sha": SHA}]:
             with self.subTest(params=params), self.assertRaises(ActionError):
-                validate_params("branches.create", params)
+                validate_params("branch_create", params)
 
     def test_merge_has_explicit_method_and_head(self):
-        r = build_request("pulls.merge", "acme/repo", FIXTURES["pulls.merge"])
+        r = build_request("pr_merge", "acme/repo", FIXTURES["pr_merge"])
         self.assertEqual((r.method, r.path), ("PUT", "/repos/acme/repo/pulls/1/merge"))
         self.assertEqual(r.body, {"sha": SHA, "merge_method": "squash"})
-        self.assertEqual(ACTIONS["pulls.merge"].permissions, {"contents": "write", "pull_requests": "read"})
+        self.assertEqual(ACTIONS["pr_merge"].permissions, {"contents": "write", "pull_requests": "read"})
         for method in [None, "", "auto", "SQUASH", []]:
             with self.assertRaises(ActionError):
-                validate_params("pulls.merge", dict(FIXTURES["pulls.merge"], merge_method=method))
+                validate_params("pr_merge", dict(FIXTURES["pr_merge"], merge_method=method))
         with self.assertRaises(ActionError):
-            validate_params("pulls.merge", {"number": 1, "expected_head_sha": SHA})
+            validate_params("pr_merge", {"number": 1, "expected_head_sha": SHA})
 
     def test_text_numbers_types_and_bounds(self):
         for params in [None, [], "", {1: "x"}]:
             with self.assertRaises(ActionError):
-                build_request("repo.get", "acme/repo", params)
-        for action, params in [("issues.get", {"number": "1/comments"}), ("issues.get", {"number": True}), ("issues.get", {"number": 0}), ("issues.get", {"number": 2**31}), ("issues.list", {"per_page": 101}), ("issues.list", {"page": 10001}), ("issues.list", {"state": []}), ("issues.create", {"title": " \t"}), ("issues.create", {"title": "a" * 257}), ("issues.create", {"title": "a\x85b"}), ("issues.comment", {"number": 1, "body": "\n\t"}), ("issues.comment", {"number": 1, "body": "a" * 65537}), ("issues.comment", {"number": 1, "body": "x\0"}), ("pulls.create", dict(FIXTURES["pulls.create"], draft=1))]:
+                build_request("repo_get", "acme/repo", params)
+        for action, params in [("issue_get", {"number": "1/comments"}), ("issue_get", {"number": True}), ("issue_get", {"number": 0}), ("issue_get", {"number": 2**31}), ("issue_list", {"per_page": 101}), ("issue_list", {"page": 10001}), ("issue_list", {"state": []}), ("issue_create", {"title": " \t"}), ("issue_create", {"title": "a" * 257}), ("issue_create", {"title": "a\x85b"}), ("issue_comment", {"number": 1, "body": "\n\t"}), ("issue_comment", {"number": 1, "body": "a" * 65537}), ("issue_comment", {"number": 1, "body": "x\0"}), ("pr_create", dict(FIXTURES["pr_create"], draft=1))]:
             with self.subTest(action=action, params=params), self.assertRaises(ActionError):
                 build_request(action, "acme/repo", params)
-        self.assertEqual(validate_params("issues.get", {"number": 2**31 - 1})["number"], 2**31 - 1)
-        validate_params("issues.create", {"title": "a" * 256, "body": "b" * 65536})
+        self.assertEqual(validate_params("issue_get", {"number": 2**31 - 1})["number"], 2**31 - 1)
+        validate_params("issue_create", {"title": "a" * 256, "body": "b" * 65536})
         for repo in ["acme/repo/../other", "https://evil", "acme/repo?x=1", "acme/repo#frag", "acme/%2e%2e", "acme/.."]:
             with self.assertRaises(ActionError):
-                build_request("repo.get", repo, {})
+                build_request("repo_get", repo, {})
+
+    def test_legacy_dotted_actions_are_not_aliases(self):
+        old_names = ["repo.get", "contents.read", "issues.list", "issues.get", "issues.comments.list", "issues.create", "issues.comment", "pulls.list", "pulls.get", "pulls.comments.list", "pulls.create", "pulls.comment", "branches.create", "pulls.merge"]
+        for action in old_names + ["github_app_action", "github_pr_merge", "github_issue_comment"]:
+            with self.subTest(action=action), self.assertRaises(ActionError):
+                build_request(action, "acme/repo", {})
+
+    def test_renamed_actions_preserve_plural_github_paths(self):
+        expected = {
+            "repo_get": ("GET", "/repos/acme/repo"),
+            "contents_read": ("GET", "/repos/acme/repo/contents/README.md"),
+            "issue_list": ("GET", "/repos/acme/repo/issues"),
+            "issue_get": ("GET", "/repos/acme/repo/issues/1"),
+            "issue_comments_list": ("GET", "/repos/acme/repo/issues/1/comments"),
+            "issue_create": ("POST", "/repos/acme/repo/issues"),
+            "issue_comment": ("POST", "/repos/acme/repo/issues/1/comments"),
+            "pr_list": ("GET", "/repos/acme/repo/pulls"),
+            "pr_get": ("GET", "/repos/acme/repo/pulls/2"),
+            "pr_comments_list": ("GET", "/repos/acme/repo/issues/2/comments"),
+            "pr_create": ("POST", "/repos/acme/repo/pulls"),
+            "pr_comment": ("POST", "/repos/acme/repo/issues/2/comments"),
+            "branch_create": ("POST", "/repos/acme/repo/git/refs"),
+            "pr_merge": ("PUT", "/repos/acme/repo/pulls/1/merge"),
+        }
+        self.assertEqual(set(expected), set(ACTIONS))
+        for action, target in expected.items():
+            with self.subTest(action=action):
+                request = build_request(action, "acme/repo", FIXTURES[action])
+                self.assertEqual((request.method, request.path), target)

@@ -9,13 +9,13 @@ policy:
     allow: [acme/*]
     exclude: [acme/payroll]
   default_access: read
-  allow_actions: [issues.comment]
-  deny_actions: [pulls.merge]
+  allow_actions: [issue_comment]
+  deny_actions: [pr_merge]
   repository_rules:
     acme/support:
       access: write
-      allow_actions: [pulls.merge]
+      allow_actions: [pr_merge]
     acme/archive:
       access: read
-      deny_actions: [issues.comment]
+      deny_actions: [issue_comment]
     acme/inherits: {}
