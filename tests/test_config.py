@@ -110,6 +110,14 @@ class ConfigTests(unittest.TestCase):
         cfg = parse_config(BASE + "  repository_rules: {acme/support: {allow_actions: [pr_merge]}}\n")
         cfg.policy.authorize("acme/support", "pr_merge")
 
+    def test_public_tool_names_and_unknown_actions_are_not_config_actions(self):
+        from hermes_github_app.actions import ACTIONS
+        for action in [*('github_' + name for name in ACTIONS), 'unknown_action']:
+            for field in ['allow_actions', 'deny_actions']:
+                for block in [f'  {field}: [{action}]\n', f'  repository_rules: {{acme/a: {{{field}: [{action}]}}}}\n']:
+                    with self.subTest(action=action, field=field, block=block), self.assertRaises(ConfigError):
+                        parse_config(BASE + block)
+
     def test_legacy_dotted_actions_rejected_in_every_exception_list(self):
         old_names = ["repo.get", "contents.read", "issues.list", "issues.get", "issues.comments.list", "issues.create", "issues.comment", "pulls.list", "pulls.get", "pulls.comments.list", "pulls.create", "pulls.comment", "branches.create", "pulls.merge"]
         for action in old_names:

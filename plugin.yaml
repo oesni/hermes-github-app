@@ -4,21 +4,21 @@ version: 0.1.0
 kind: standalone
 description: Host-owned GitHub App credentials with per-repository action policy.
 provides_tools:
-  - repo_get
-  - contents_read
-  - issue_list
-  - issue_get
-  - issue_comments_list
-  - issue_create
-  - issue_comment
-  - pr_list
-  - pr_get
-  - pr_comments_list
-  - pr_create
-  - pr_comment
-  - pr_review_comment
-  - branch_create
-  - pr_merge
+  - github_repo_get
+  - github_contents_read
+  - github_issue_list
+  - github_issue_get
+  - github_issue_comments_list
+  - github_issue_create
+  - github_issue_comment
+  - github_pr_list
+  - github_pr_get
+  - github_pr_comments_list
+  - github_pr_create
+  - github_pr_comment
+  - github_pr_review_comment
+  - github_branch_create
+  - github_pr_merge
 python_dependencies:
   - httpx>=0.27,<1
   - PyJWT[crypto]>=2.9,<3

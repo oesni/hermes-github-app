@@ -8,7 +8,7 @@ Use the configuration schema and examples packaged with this revision. Supply Ap
 
 ## Operations
 
-This revision registers individual operation tools using the action names below.
+The model-facing tool names add `github_` to configuration action identifiers.
 
 Configuration actions in this revision:
 
