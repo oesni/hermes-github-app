@@ -1,0 +1,15 @@
+version: 1
+auth:
+  app_id: 12345
+  installation_id: 67890
+  private_key_path: /srv/hermes-private/github-app.pem
+policy:
+  repositories:
+    mode: allowlist
+    allow: [acme/demo]
+    exclude: []
+  default_access: read
+  deny_actions: [pr_merge]
+  repository_rules:
+    acme/demo:
+      allow_actions: [pr_review_comment]

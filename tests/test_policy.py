@@ -14,7 +14,7 @@ class PolicyTests(unittest.TestCase):
             policy.authorize(repo, action)
 
     def test_frozen_profiles_and_explicit_merge(self):
-        self.assertEqual(len(ACTIONS), 14)
+        self.assertEqual(len(ACTIONS), 15)
         self.assertEqual(len(READ_ACTIONS), 8)
         self.assertEqual(len(WRITE_ACTIONS), 13)
         for access, expected in [("read", READ_ACTIONS), ("write", WRITE_ACTIONS)]:
@@ -81,3 +81,25 @@ class PolicyTests(unittest.TestCase):
         p.authorize("acme/repo.git", "contents_read")
         with self.assertRaises(TypeError):
             p.repository_rules["acme/repo.git"] = None
+
+
+class InlineCommentPolicyTests(unittest.TestCase):
+    def test_explicit_allow_and_deny(self):
+        base = {"repositories": {"mode": "all", "exclude": ["acme/private"]}, "default_access": "write"}
+        for access in ["read", "write"]:
+            with self.assertRaises(PolicyError):
+                Policy.from_dict(dict(base, default_access=access)).authorize("acme/repo", "pr_review_comment")
+        granted = dict(base, allow_actions=["pr_review_comment"])
+        self.assertEqual(Policy.from_dict(granted).authorize("acme/repo", "pr_review_comment"), "acme/repo")
+        local = dict(base, repository_rules={"acme/repo": {"access": "read", "allow_actions": ["pr_review_comment"]}})
+        Policy.from_dict(local).authorize("acme/repo", "pr_review_comment")
+        for cfg, repo in [(dict(granted, deny_actions=["pr_review_comment"]), "acme/repo"), (dict(granted, repository_rules={"acme/repo": {"deny_actions": ["pr_review_comment"]}}), "acme/repo"), (granted, "acme/private")]:
+            with self.assertRaises(PolicyError):
+                Policy.from_dict(cfg).authorize(repo, "pr_review_comment")
+
+    def test_global_deny_overrides_repository_inline_allow(self):
+        config = {"repositories": {"mode": "all", "exclude": []}, "default_access": "write",
+                  "deny_actions": ["pr_review_comment"],
+                  "repository_rules": {"acme/repo": {"access": "read", "allow_actions": ["pr_review_comment"]}}}
+        with self.assertRaises(PolicyError):
+            Policy.from_dict(config).authorize("acme/repo", "pr_review_comment")

@@ -28,6 +28,7 @@ def test_isolated_gormes_receipt():
     assert receipt['github_network'] is False
     assert receipt['stages']['unchanged_production_hook']['new_tool_blocked'] is True
     candidate = receipt['stages']['additive_policy_candidate']
+    assert candidate['added_exact_tool_count'] == len(ACTIONS)
     assert candidate['policy_denial_before_upstream'] and candidate['real_service_mock_http']
     assert candidate['provenance_gate_still_blocks'] and candidate['secret_nonexposure']
     assert receipt['stages']['orpheus']['result_received']

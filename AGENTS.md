@@ -2,8 +2,8 @@
 
 ## Contract and implementation
 
-- Native tool names and configuration action names are the same fourteen unprefixed snake_case identifiers (for example, `pr_merge` and `issue_comment`). Reject legacy dotted names; do not add aliases or a generic dispatcher tool.
-- Read `docs/spec/github-app-configuration.md` before changing behavior. It is the version-one configuration and runtime contract; preserve its explicit limitations and prerequisites. Do not silently expand a frozen action catalog or profile.
+- Native tool names and configuration action names are the same unprefixed snake_case identifiers (for example, `pr_merge` and `issue_comment`). Reject legacy dotted names; do not add aliases or a generic dispatcher tool.
+- Read `docs/spec/github-app-configuration.md` before changing behavior. It defines the version-1 configuration and runtime contract. This unreleased implementation recognizes fifteen actions, including the user-requested `pr_review_comment` through explicit action allowance. The read profile retains eight actions and write retains thirteen; neither includes inline review comments or merge. The user explicitly requested no package or configuration version bump for this addition.
 - Keep GitHub App keys, JWTs, installation tokens, configuration, and authorization decisions on the trusted host. Never expose credentials through agent arguments, results, errors, logs, forwarded environments, or sandbox mounts.
 - Enforce repository selection, exclusions, action policy, argument validation, canonical target checks, and operation prerequisites on the host before mutation. Explicit denials win over grants. Merge uses the same explicit action policy and GitHub protection checks; do not add an unsolicited approval adapter or platform-specific authorization workflow.
 - Register GitHub tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Do not pin a Hermes source revision, and do not restrict the host's other tools, hooks, delegation, or Docker container reuse. Keep credentials and repository policy inside this plugin, and recheck the protected configuration and key files before every operation.
