@@ -1,4 +1,4 @@
-"""Native Hermes entrypoint. Secrets and approvals stay on the trusted host."""
+"""Native Hermes entrypoint. Secrets stay on the trusted host."""
 from __future__ import annotations
 import atexit
 import json
@@ -6,10 +6,8 @@ import logging
 import os
 from dataclasses import asdict
 from .actions import ACTIONS, PARAMETER_FIELDS, ActionError, canonical_repo, validate_params
-from .approvals import MergeApprovals
 from .client import GitHubClient
 from .config import ConfigError, parse_config
-from .discord_approval import DiscordApprovalAdapter
 from .isolation import IsolationError
 from .runtime import HermesRuntime
 from .secure_files import SecureFileError, read_secure_file
@@ -19,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def register(ctx):
-    client = runtime = adapter = approvals = None
+    client = runtime = None
     stage = "config_path"
     try:
         path = os.environ.get('HERMES_GITHUB_APP_CONFIG')
@@ -37,10 +35,7 @@ def register(ctx):
         runtime.check()
         stage = "private_key"
         client = GitHubClient(**asdict(config.auth))
-        ids = tuple(a.user_id for a in config.merge_approval.approvers)
-        adapter = DiscordApprovalAdapter(ids)
-        approvals = MergeApprovals(adapter, ids)
-        service = GitHubService(config.policy, client, approvals)
+        service = GitHubService(config.policy, client)
     except ConfigError as exc:
         # ConfigError is contractually value-free and safe to show to the admin.
         logger.warning('GitHub App unavailable: %s', exc)
@@ -67,7 +62,7 @@ def register(ctx):
                 params = {key: value for key, value in args.items() if key != 'repo'}
                 validate_params(action, params)
                 result = service.execute(action, repo, params,
-                                         context=call, recheck_isolation=lambda: runtime.check(call))
+                                         recheck_isolation=lambda: runtime.check(call))
                 return json.dumps(result, ensure_ascii=False)
             except ActionError:
                 return json.dumps({'ok': False, 'code': 'invalid_arguments', 'error': 'Invalid tool arguments.'})
@@ -79,8 +74,6 @@ def register(ctx):
 
     def close():
         runtime.close()
-        approvals.close()
-        adapter.close()
         client.close()
 
     runtime.install_environment_guard()
@@ -122,7 +115,7 @@ def tool_schema(action):
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
     if action == 'pr_merge':
-        description += ' Requires a separate authenticated human Discord confirmation for this exact PR and head.'
+        description += ' Requires explicit policy allowance and the expected PR head SHA; GitHub protections apply.'
     return {'name': action, 'description': description, 'parameters': {
         'type': 'object', 'additionalProperties': False,
         'properties': properties, 'required': ['repo', *sorted(required)],

@@ -93,7 +93,7 @@ def test_direct_registry_bypass_refused_and_runtime_snapshot(configuration, monk
 def test_context_cancelled_on_agent_interruption_or_session_replacement():
     agent = SimpleNamespace(_interrupt_requested=False)
     runtime = SimpleNamespace(closed=False, find_agent=lambda _: agent)
-    context = HostCall(runtime, agent, 's', 't', 'c', 'id')
+    context = HostCall(runtime, agent, 's', 't', 'c')
     assert not context.cancelled()
     agent._interrupt_requested = True
     assert context.cancelled()
@@ -143,7 +143,8 @@ assert {"terminal","read_file","write_file","search_files","patch","repo_get"} <
 args={"repo":"acme/demo"}
 result=model_tools.handle_function_call("repo_get",args,task_id="default",session_id="native-test",tool_call_id="call-1",enabled_tools=["repo_get"])
 assert json.loads(result)["ok"],result
-context=service.execute.call_args.kwargs["context"]
+from hermes_github_app.runtime import HostCall
+context=next(cell.cell_contents for cell in service.execute.call_args.kwargs["recheck_isolation"].__closure__ if isinstance(cell.cell_contents,HostCall))
 assert context.session_id=="native-test" and not context.cancelled()
 for tool,bad in [("issue_get",{"repo":"acme/demo","number":"42"}), ("pr_create",{"repo":"acme/demo","title":"t","base":"main","head":"feature","draft":"false"}), ("repo_get",{"repo":"acme/demo","action":"repo_get"})]:
     before=service.execute.call_count

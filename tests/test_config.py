@@ -23,9 +23,8 @@ class ConfigTests(unittest.TestCase):
         cfg = parse_config(BASE.encode())
         self.assertEqual(cfg.version, 1)
         self.assertEqual(cfg.auth.app_id, 12345)
-        self.assertEqual(cfg.merge_approval.approvers, ())
         self.assertEqual(cfg.policy.authorize("acme/a", "repo_get"), "acme/a")
-        explicit = parse_config(BASE + "  allow_actions: []\n  deny_actions: []\n  repository_rules: {}\nmerge_approval: {approvers: []}\n")
+        explicit = parse_config(BASE + "  allow_actions: []\n  deny_actions: []\n  repository_rules: {}\n")
         self.assertEqual(cfg, explicit)
 
     def test_yaml_12_strings_not_yaml_11_booleans(self):
@@ -60,17 +59,9 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config(b"\xff")
 
-    def test_approver_bounds_types_and_duplicates(self):
-        prefix = BASE + "merge_approval:\n  approvers:\n"
-        for value in ['"1"', '"18446744073709551615"']:
-            cfg = parse_config(prefix + f"    - {{platform: discord, user_id: {value}}}\n")
-            self.assertEqual(cfg.merge_approval.approvers[0].platform, "discord")
-        for value in ['1', '"0"', '"01"', '"+1"', '"name"', '"18446744073709551616"', 'null']:
-            with self.subTest(value=value), self.assertRaises(ConfigError):
-                parse_config(prefix + f"    - {{platform: discord, user_id: {value}}}\n")
-        for block in ['    - {platform: local, user_id: "1"}\n', '    - {platform: discord, user_id: "1", bot: false}\n', '    - {platform: discord}\n', '    - {platform: discord, user_id: "1"}\n    - {platform: discord, user_id: "1"}\n']:
-            with self.assertRaises(ConfigError):
-                parse_config(prefix + block)
+    def test_removed_approval_configuration_is_rejected(self):
+        with self.assertRaises(ConfigError):
+            parse_config(BASE + 'merge_approval: {approvers: []}\n')
 
     def test_no_secret_value_in_diagnostics(self):
         for case in [BASE + 'secret: "sensitive-secret"\n', BASE.replace("app_id: 12345", 'app_id: "sensitive-secret"'), BASE + 'bad: ["sensitive-secret"\n']:
@@ -115,10 +106,9 @@ class ConfigTests(unittest.TestCase):
         # client's issue/PR distinction must refuse an issue action on a PR.
         for cfg in configs:
             cfg.policy.authorize("acme/support", "issue_comment")
-        # Decision 16 grants merge capability, but has no authorized approvers.
+        # Decision 16 grants merge through the same action policy.
         cfg = parse_config(BASE + "  repository_rules: {acme/support: {allow_actions: [pr_merge]}}\n")
         cfg.policy.authorize("acme/support", "pr_merge")
-        self.assertEqual(cfg.merge_approval.approvers, ())
 
     def test_legacy_dotted_actions_rejected_in_every_exception_list(self):
         old_names = ["repo.get", "contents.read", "issues.list", "issues.get", "issues.comments.list", "issues.create", "issues.comment", "pulls.list", "pulls.get", "pulls.comments.list", "pulls.create", "pulls.comment", "branches.create", "pulls.merge"]

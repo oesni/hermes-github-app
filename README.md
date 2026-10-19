@@ -38,7 +38,7 @@ For each selected repository:
 | --- | --- |
 | read | `repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `pr_list`, `pr_get`, `pr_comments_list` |
 | write | All read actions plus `issue_create`, `issue_comment`, `pr_create`, `pr_comment`, `branch_create` |
-| explicit allowance only | `pr_merge` — separate human confirmation required |
+| explicit allowance only | `pr_merge` — explicit policy allowance required |
 
 Each operation is a separate native tool with the same name as its policy action. Arguments are flat: for example, `issue_comment` takes `{repo, number, body}` and `pr_merge` takes `{repo, number, expected_head_sha, merge_method}`. There is no generic action dispatcher or legacy operation alias. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, file write, git push/clone, review/diff API, PR edit/delete, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. `contents_read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
 
@@ -64,7 +64,6 @@ plugins:
   disabled: [raft-platform]
 platform_toolsets:
   cli: [terminal, file, github_app]
-  discord: [terminal, file, github_app]
 terminal:
   backend: docker
   docker_volumes: []
@@ -79,13 +78,11 @@ Every configured platform must use only the supported toolsets. Disable the bund
 
 Keep config/key files outside every sandbox/mount. Accepted modes are Hermes-owned `0400`/`0600`, or root-owned `0440`/`0640` readable through a trusted Hermes group. Final files and ancestors cannot be symlinks. Parent directories must be root/Hermes-owned without group/other write access (a conservative subset of trusted-directory layouts). `/tmp` and symlinked paths are unsuitable. Group membership and trusted host/Docker integrity remain administrator responsibilities. The host Python/plugin code must not be writable by the agent. No other credentials or host control services should bypass this boundary.
 
-## Human merge confirmation
+## Merge policy
 
-Both bundled policy examples deny merges globally. Explicitly allowing `pr_merge` still does not authorize one. A separately configured `merge_approval.approvers` list must contain stable human Discord user IDs; see [merge-approvers.yaml](examples/merge-approvers.yaml). Empty lists leave merge unavailable. Bot accounts, usernames, roles, and other platforms cannot approve.
+Both bundled examples deny `pr_merge` globally. To enable it for selected repositories, configure an explicit allowance without a conflicting global or repository denial. Merge uses the same host-enforced policy as other actions; there is no separate approval adapter or platform-specific configuration.
 
-The adapter uses the existing running Hermes Discord client's authenticated interactions. It sends host-owned DMs with Approve/Deny buttons to configured approvers; it never starts another bot or reads its token. Message/channel bindings and actor identity are checked. Ordinary chat messages, agent arguments, and forged approval flags cannot approve. CLI-originated calls can use this adapter only when a live gateway client exists in that host process; otherwise merge returns `approval_required_unavailable`.
-
-The confirmation shows repository, PR, base/head branch, expected head SHA, method, escaped untrusted title, and the remaining base-retarget race. Approval is tied to one call/session/target and expires ten minutes after presentation. Configure host tool timeouts for that window plus the bounded API operation. Interruption/session replacement cancels pending requests. GitHub atomically checks the head SHA; it cannot atomically bind the base branch. An uncertain mutation is never automatically retried.
+A merge requires the PR number, expected head SHA, and explicit merge method. The host verifies the target and immediately rechecks isolation, policy, base/head branches, and head SHA before one dispatch. GitHub atomically checks the head SHA; its API cannot atomically bind the base branch, so retargeting after the final check remains possible. An uncertain mutation is never automatically retried.
 
 GitHub enforces repository protections. **Administrators must keep the App free of applicable bypass grants.** The plugin does not independently audit protection/ruleset bypass status and cannot guarantee protection if that prerequisite is violated. It neither requests administrative permissions nor exposes protection configuration. Tokens are scoped to the same installation, target repository, and operation permissions.
 
@@ -93,7 +90,7 @@ GitHub enforces repository protections. **Administrators must keep the App free 
 
 This repository is a Hermes directory plugin (`plugin.yaml`, root `__init__.py`) and a Python package. A future administrator installation must use the same dependency runtime as Hermes, enable `hermes-github-app`, and select `github_app` alongside the narrow surfaces above. Merely copying or reviewing this repository does not enable it.
 
-Configuration and key contents are startup snapshots. Restart the plugin's Hermes process to change policy, approvers, or credentials. Files are still checked on every operation for presence/ownership/mode/isolation; removing or exposing them refuses calls. Restoring safe files does not change the loaded contents. Invalid startup omits this plugin's tool and leaves Hermes running. Diagnostics never echo raw credentials or rejected config values.
+Configuration and key contents are startup snapshots. Restart the plugin's Hermes process to change policy or credentials. Files are still checked on every operation for presence/ownership/mode/isolation; removing or exposing them refuses calls. Restoring safe files does not change the loaded contents. Invalid startup omits this plugin's tool and leaves Hermes running. Diagnostics never echo raw credentials or rejected config values.
 
 ## Development verification
 
@@ -104,4 +101,4 @@ HERMES_GITHUB_APP_HERMES_SOURCE=/absolute/path/to/hermes-agent python -m pytest 
 HERMES_GITHUB_APP_DOCKER_TEST=1 python -m pytest tests/test_isolation.py::test_real_docker_inspect_boundary -q
 ```
 
-The native smoke uses real Hermes middleware/dispatch with a test live-agent binding and fake GitHub service. Docker smoke creates and removes a disposable Alpine container. Discord tests exercise actual `discord.py` views/callbacks with mocked network delivery; no live approvals, GitHub operations, production secrets, or installed profile changes are performed.
+The native smoke uses real Hermes middleware/dispatch with a test live-agent binding and fake GitHub service. Docker smoke creates and removes a disposable Alpine container. No live GitHub operations, production secrets, or installed profile changes are used.

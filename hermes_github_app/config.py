@@ -20,22 +20,10 @@ class AuthConfig:
 
 
 @dataclass(frozen=True)
-class Approver:
-    platform: str
-    user_id: str
-
-
-@dataclass(frozen=True)
-class MergeApprovalConfig:
-    approvers: tuple[Approver, ...] = ()
-
-
-@dataclass(frozen=True)
 class Config:
     version: int
     auth: AuthConfig
     policy: Policy
-    merge_approval: MergeApprovalConfig
 
 
 def _mapping(value, allowed, required=frozenset()):
@@ -99,7 +87,7 @@ def parse_config(text: str | bytes) -> Config:
         raise
     except Exception:
         raise ConfigError("configuration YAML syntax or UTF-8 error") from None
-    root = _mapping(data, {"version", "auth", "policy", "merge_approval"}, {"version", "auth", "policy"})
+    root = _mapping(data, {"version", "auth", "policy"}, {"version", "auth", "policy"})
     if type(root["version"]) is not int or root["version"] != 1:
         raise ConfigError("unsupported configuration version")
     auth = _mapping(root["auth"], {"app_id", "installation_id", "private_key_path"}, {"app_id", "installation_id", "private_key_path"})
@@ -111,18 +99,4 @@ def parse_config(text: str | bytes) -> Config:
         policy = Policy.from_dict(root["policy"])
     except PolicyError:
         raise ConfigError("configuration policy field/type/action error") from None
-    approval = _mapping(root.get("merge_approval", {}), {"approvers"})
-    records = approval.get("approvers", [])
-    if not isinstance(records, list):
-        raise ConfigError("approvers must be a list")
-    approvers = []
-    for record in records:
-        record = _mapping(record, {"platform", "user_id"}, {"platform", "user_id"})
-        user_id = record["user_id"]
-        if record["platform"] != "discord" or not isinstance(user_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", user_id) or int(user_id) > 2**64 - 1:
-            raise ConfigError("invalid approver identity")
-        approver = Approver("discord", user_id)
-        if approver in approvers:
-            raise ConfigError("duplicate approver identity")
-        approvers.append(approver)
-    return Config(1, auth_config, policy, MergeApprovalConfig(tuple(approvers)))
+    return Config(1, auth_config, policy)

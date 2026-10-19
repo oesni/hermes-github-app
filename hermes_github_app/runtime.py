@@ -31,7 +31,6 @@ class HostCall:
     session_id: str
     task_id: str
     call_id: str
-    identity: str
 
     def cancelled(self):
         try:
@@ -133,8 +132,7 @@ class HermesRuntime:
             if not all(isinstance(v, str) and v for v in (session_id, task_id, tool_call_id)):
                 raise IsolationError('Host call identity unavailable')
             agent = self.find_agent(session_id)
-            call = HostCall(self, agent, session_id, task_id, tool_call_id,
-                            f'{id(self)}:{id(agent)}:{session_id}:{task_id}:{tool_call_id}')
+            call = HostCall(self, agent, session_id, task_id, tool_call_id)
             self.check(call)
             token = _CURRENT_CALL.set(call)
             try:

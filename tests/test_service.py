@@ -2,7 +2,6 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from hermes_github_app.policy import PolicyError
 from hermes_github_app.service import GitHubService
-from hermes_github_app.approvals import MergeApprovals
 
 
 def policy():
@@ -35,24 +34,6 @@ def test_authorized_canonical_repo():
     assert GitHubService(policy(),client).execute('repo_get','Acme/Demo',{},recheck_isolation=lambda:None)=={'ok':True,'data':{'name':'demo'}}
     client.session.assert_called_once_with('acme/demo',{'metadata':'read'})
 
-def test_merge_unavailable_without_host_approval():
-    client=Mock()
-    result=GitHubService(policy(),client).execute('pr_merge','acme/demo',{'number':1,'expected_head_sha':'a'*40,'merge_method':'squash'},recheck_isolation=lambda:None)
-    assert result['code']=='approval_required_unavailable';client.session.assert_not_called()
-
-def test_merge_rechecks_isolation_policy_and_target():
-    target={'repo':'acme/demo','number':1,'base_branch':'main','head_branch':'feature','expected_head_sha':'a'*40,'merge_method':'squash'}
-    adapter=Mock();adapter.available.return_value=True
-    def present(request_id,target,deadline,callback):callback(request_id,'123',False,True);return True
-    adapter.present.side_effect=present
-    client=Mock();session=client.session.return_value;session.repo='acme/demo';session.inspect_merge.return_value=target;session.merge.return_value={'merged':True}
-    isolation=Mock();p=policy()
-    result=GitHubService(p,client,MergeApprovals(adapter,['123'])).execute('pr_merge','acme/demo',{'number':1,'expected_head_sha':'a'*40,'merge_method':'squash'},context=SimpleNamespace(identity='host-call',cancelled=lambda:False),recheck_isolation=isolation)
-    assert result=={'ok':True,'data':{'merged':True}}
-    assert isolation.call_count==2 and client.session.call_count==2 and session.inspect_merge.call_count==2
-    session.merge.assert_called_once()
-
-
 def test_legacy_dotted_action_names_are_not_aliases():
     client=Mock()
     for action in ('repo.get','issues.comment','pulls.merge'):
@@ -61,17 +42,63 @@ def test_legacy_dotted_action_names_are_not_aliases():
     client.session.assert_not_called()
 
 
-def test_merge_without_available_approvers_mints_no_write_token():
-    for approvals in (MergeApprovals(None,[]),MergeApprovals(Mock(available=lambda:False),['123'])):
-        client=Mock()
-        result=GitHubService(policy(),client,approvals).execute('pr_merge','acme/demo',
-            {'number':1,'expected_head_sha':'a'*40,'merge_method':'squash'},
-            context=SimpleNamespace(identity='host-call',cancelled=lambda:False),recheck_isolation=lambda:None)
-        assert result=={'ok':False,'code':'approval_required_unavailable','error':'approval_required_unavailable'}
-        client.session.assert_not_called()
-
-
 def test_unexpected_client_failure_is_not_misclassified_as_isolation():
     client=Mock();client.session.side_effect=RuntimeError('private data')
     result=GitHubService(policy(),client).execute('repo_get','acme/demo',{},recheck_isolation=lambda:None)
     assert result=={'ok':False,'code':'github_unavailable','error':'GitHub operation failed.'}
+
+
+def merge_case():
+    target={'repo':'acme/demo','number':1,'base_branch':'main','head_branch':'feature','expected_head_sha':'a'*40,'merge_method':'squash'}
+    params={'number':1,'expected_head_sha':'a'*40,'merge_method':'squash'}
+    client=Mock();session=client.session.return_value
+    session.repo='acme/demo';session.inspect_merge.return_value=target
+    session.merge.return_value={'merged':True}
+    return client,session,target,params
+
+
+def test_policy_authorized_merge_rechecks_and_dispatches_without_adapter():
+    client,session,target,params=merge_case()
+    isolation=Mock();p=policy()
+    result=GitHubService(p,client).execute('pr_merge','acme/demo',params,recheck_isolation=isolation)
+    assert result=={'ok':True,'data':{'merged':True}}
+    assert isolation.call_count==2 and session.inspect_merge.call_count==2
+    assert p.authorize.call_count==4
+    client.session.assert_called_once_with('acme/demo',{'contents':'write','pull_requests':'read'})
+    session.merge.assert_called_once_with(params)
+
+
+def test_merge_target_change_refuses_without_dispatch():
+    client,session,target,params=merge_case()
+    session.inspect_merge.side_effect=[target,{**target,'base_branch':'other'}]
+    result=GitHubService(policy(),client).execute('pr_merge','acme/demo',params,recheck_isolation=lambda:None)
+    assert result['code']=='target_changed';session.merge.assert_not_called()
+
+
+def test_merge_second_isolation_check_refuses_without_dispatch():
+    client,session,target,params=merge_case()
+    result=GitHubService(policy(),client).execute('pr_merge','acme/demo',params,recheck_isolation=Mock(side_effect=[None,RuntimeError()]))
+    assert result['code']=='isolation_refusal';session.merge.assert_not_called()
+
+
+def test_merge_policy_revocation_refuses_without_dispatch():
+    client,session,target,params=merge_case();p=policy()
+    p.authorize.side_effect=['acme/demo','acme/demo',PolicyError('denied')]
+    result=GitHubService(p,client).execute('pr_merge','acme/demo',params,recheck_isolation=lambda:None)
+    assert result['code']=='policy_denied';session.merge.assert_not_called()
+
+
+def test_merge_uncertain_result_is_not_retried():
+    from hermes_github_app.client import ClientError
+    client,session,target,params=merge_case()
+    session.merge.side_effect=ClientError('Mutation outcome is uncertain.', 'uncertain_outcome')
+    result=GitHubService(policy(),client).execute('pr_merge','acme/demo',params,recheck_isolation=lambda:None)
+    assert result['code']=='uncertain_outcome';session.merge.assert_called_once()
+
+
+def test_merge_explicit_policy_deny_never_authenticates():
+    from hermes_github_app.policy import Policy
+    client,session,target,params=merge_case()
+    p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':'write','allow_actions':['pr_merge'],'deny_actions':['pr_merge']})
+    result=GitHubService(p,client).execute('pr_merge','acme/demo',params,recheck_isolation=lambda:None)
+    assert result['code']=='policy_denied';client.session.assert_not_called()

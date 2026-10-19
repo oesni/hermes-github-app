@@ -13,7 +13,6 @@
   "hermes_cli/middleware.py": "699f514c4f437670e345277de7b105a8a7b18e052af68b1a2bbef904eef99f6c",
   "agent/tool_executor.py": "4d42f9cf8ba7ed556aaacdc6d4c82cd67b2d3d68a8163ec763827851ee15d592",
   "agent/agent_runtime_helpers.py": "ed9e1eddaf598c6e61a107f248449bb994be688dca24bd452772b390b309f3d8",
-  "plugins/platforms/discord/adapter.py": "e563798c540333c1d2ee6c4638ddf0688728b7410c20d02c98c2c9fe1c596bb2",
   "gateway/run.py": "e2fd0c9a6b93c2ef2c14556c7a104f1c6c159c25b6c13ce109f758db6ae093d8",
   "tools/read_extract.py": "f52f0679220c068926ea865b141ff116c342a151413c6dcbaceff96040aae772",
   "hermes_constants.py": "92ce967cb86e4ab3dd9dbb3ec657c1b7e4c603057109083d2a173a69cc431ede"
