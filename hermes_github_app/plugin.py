@@ -9,7 +9,7 @@ from .actions import ACTIONS, PARAMETER_FIELDS, ActionError, canonical_repo, val
 from .client import GitHubClient
 from .config import ConfigError, parse_config
 from .isolation import IsolationError
-from .runtime import HermesRuntime
+from .runtime import HostBoundary
 from .secure_files import SecureFileError, read_secure_file
 from .service import GitHubService
 
@@ -30,7 +30,7 @@ def register(ctx):
         stage = "private_key"
         from .secure_files import check_secure_file
         check_secure_file(config.auth.private_key_path)
-        runtime = HermesRuntime(ctx, path, config.auth.private_key_path)
+        runtime = HostBoundary(path, config.auth.private_key_path)
         stage = "isolation"
         runtime.check()
         stage = "private_key"
@@ -44,7 +44,7 @@ def register(ctx):
         logger.warning("GitHub App unavailable: %s %s check failed.", stage, exc.category)
         return
     except IsolationError:
-        logger.warning('GitHub App unavailable: sandbox or tool-surface isolation check failed.')
+        logger.warning('GitHub App unavailable: protected-file check failed.')
         return
     except Exception:
         if client is not None:
@@ -55,14 +55,13 @@ def register(ctx):
     def make_handler(action):
         def invoke(args, **kwargs):
             try:
-                call = runtime.current_call()
+                runtime.check()
                 if not isinstance(args, dict) or 'repo' not in args:
                     raise ActionError('missing repo')
                 repo = canonical_repo(args['repo'])
                 params = {key: value for key, value in args.items() if key != 'repo'}
                 validate_params(action, params)
-                result = service.execute(action, repo, params,
-                                         recheck_isolation=lambda: runtime.check(call))
+                result = service.execute(action, repo, params, recheck_isolation=runtime.check)
                 return json.dumps(result, ensure_ascii=False)
             except ActionError:
                 return json.dumps({'ok': False, 'code': 'invalid_arguments', 'error': 'Invalid tool arguments.'})
@@ -76,15 +75,11 @@ def register(ctx):
         runtime.close()
         client.close()
 
-    runtime.install_environment_guard()
     for action in ACTIONS:
         handler = make_handler(action)
-        runtime.handlers[action] = handler
         schema = tool_schema(action)
         ctx.register_tool(name=action, toolset='github_app', handler=handler,
                           description=schema['description'], schema=schema)
-    ctx.register_middleware('tool_execution', runtime.middleware)
-    ctx.register_hook('pre_tool_call', runtime.pre_tool)
     if callable(getattr(ctx, 'on_unload', None)):
         ctx.on_unload(close)
     atexit.register(close)
@@ -99,7 +94,7 @@ def tool_schema(action):
         if field in {'number', 'page', 'per_page'}:
             maximum = {'number': 2**31 - 1, 'page': 10000, 'per_page': 100}[field]
             # Hermes coerces property.type integer/boolean strings before the
-            # middleware. An equivalent single-branch anyOf preserves the raw
+            # handler. An equivalent single-branch anyOf preserves the raw
             # JSON value so our strict validator can reject string coercion.
             prop = {'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': maximum}]}
         elif field == 'draft':
