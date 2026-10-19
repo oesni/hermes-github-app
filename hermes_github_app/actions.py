@@ -1,4 +1,4 @@
-"""Frozen version-one action catalog and strict, credential-free arguments."""
+"""Versioned action catalog and strict, credential-free arguments."""
 from dataclasses import dataclass
 from types import MappingProxyType
 import re
@@ -45,6 +45,8 @@ ACTIONS = {
     "branch_create": ActionSpec("contents", "write"),
     "pr_merge": ActionSpec("contents", "write", (("pull_requests", "read"),)),
 }
+ACTIONS_BY_VERSION = MappingProxyType({1: frozenset(ACTIONS), 2: frozenset(ACTIONS) | {"pr_review_comment"}})
+ACTIONS["pr_review_comment"] = ActionSpec("pull_requests", "write")
 READ_ACTIONS = frozenset({"repo_get", "contents_read", "issue_list", "issue_get", "issue_comments_list", "pr_list", "pr_get", "pr_comments_list"})
 WRITE_ACTIONS = READ_ACTIONS | {"issue_create", "issue_comment", "pr_create", "pr_comment", "branch_create"}
 
@@ -110,6 +112,7 @@ _SCHEMAS = {
     "pr_create": ({"title", "head", "base"}, {"body", "draft"}),
     "pr_comment": ({"number", "body"}, set()),
     "branch_create": ({"branch"}, {"source_branch", "expected_source_sha", "source_commit_sha"}),
+    "pr_review_comment": ({"number", "body", "commit_id", "path", "line", "side"}, {"start_line", "start_side"}),
     "pr_merge": ({"number", "expected_head_sha", "merge_method"}, set()),
 }
 
@@ -148,8 +151,22 @@ def validate_params(action, params):
     if action in {"issue_create", "pr_create"}:
         result["title"] = _text(result["title"], "title", maximum=256)
         result["body"] = _text(result.get("body", ""), "body", blank=True, controls=True)
-    if action in {"issue_comment", "pr_comment"}:
+    if action in {"issue_comment", "pr_comment", "pr_review_comment"}:
         result["body"] = _text(result["body"], "body", controls=True)
+    if action == "pr_review_comment":
+        result["commit_id"] = valid_sha(result["commit_id"], "commit_id")
+        path = _text(result["path"], "path", maximum=4096)
+        if path.startswith("/") or "\\" in path or any(p in {"", ".", ".."} for p in path.split("/")):
+            raise ActionError("invalid review comment path")
+        result["line"] = _integer(result["line"], "line")
+        if not isinstance(result["side"], str) or result["side"] not in {"LEFT", "RIGHT"}:
+            raise ActionError("invalid side")
+        if ("start_line" in result) != ("start_side" in result):
+            raise ActionError("start_line and start_side must be paired")
+        if "start_line" in result:
+            result["start_line"] = _integer(result["start_line"], "start_line")
+            if result["start_side"] != result["side"] or result["start_line"] >= result["line"]:
+                raise ActionError("invalid review comment range")
     if action == "pr_create":
         for name in ("head", "base"):
             result[name] = valid_ref(result[name], name, branch=True)
@@ -187,6 +204,8 @@ def build_request(action: str, repo: str, params: dict) -> Request:
         return Request("POST", prefix + "/git/refs", {}, {"ref": "refs/heads/" + p["branch"], "sha": p.get("source_commit_sha", p.get("expected_source_sha"))})
     if action == "pr_merge":
         return Request("PUT", prefix + f"/pulls/{p['number']}/merge", {}, {"sha": p["expected_head_sha"], "merge_method": p["merge_method"]})
+    if action == "pr_review_comment":
+        return Request("POST", prefix + f"/pulls/{p['number']}/comments", {}, {k: v for k, v in p.items() if k != "number"})
     resource, operation = action.split("_", 1)
     endpoint = prefix + "/" + {"issue": "issues", "pr": "pulls"}[resource]
     if operation == "list":

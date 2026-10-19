@@ -88,7 +88,7 @@ def parse_config(text: str | bytes) -> Config:
     except Exception:
         raise ConfigError("configuration YAML syntax or UTF-8 error") from None
     root = _mapping(data, {"version", "auth", "policy"}, {"version", "auth", "policy"})
-    if type(root["version"]) is not int or root["version"] != 1:
+    if type(root["version"]) is not int or root["version"] not in {1, 2}:
         raise ConfigError("unsupported configuration version")
     auth = _mapping(root["auth"], {"app_id", "installation_id", "private_key_path"}, {"app_id", "installation_id", "private_key_path"})
     path = auth["private_key_path"]
@@ -96,7 +96,7 @@ def parse_config(text: str | bytes) -> Config:
         raise ConfigError("private_key_path must be an absolute path")
     auth_config = AuthConfig(_positive(auth["app_id"]), _positive(auth["installation_id"]), path)
     try:
-        policy = Policy.from_dict(root["policy"])
+        policy = Policy.from_dict(root["policy"], version=root["version"])
     except PolicyError:
         raise ConfigError("configuration policy field/type/action error") from None
-    return Config(1, auth_config, policy)
+    return Config(root["version"], auth_config, policy)

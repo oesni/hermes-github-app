@@ -275,7 +275,43 @@ class Session:
         except ClientError:raise ClientError("GitHub mutation outcome is uncertain.","uncertain_outcome") from None
         return self.safe({'merged':True,'sha':sha})
 
+    def review_comment(self, params, request):
+        target = self.target(params['number'], True)
+        head = target.get('head')
+        if (target.get('state') != 'open' or not isinstance(head, dict)
+                or self.sha(head.get('sha')) != params['commit_id']):
+            raise ClientError('Pull request is closed or its head changed.', 'target_changed')
+        # GitHub validates the diff coordinates. Pin the comment to the checked
+        # commit; a concurrent push can make it outdated, never retarget it.
+        response = self.request('POST', f'/pulls/{params["number"]}/comments',
+                                body=request.body, mutation=True)
+        try:
+            result = response.data
+            if not isinstance(result, dict) or type(result.get('id')) is not int or result['id'] <= 0:
+                raise ValueError()
+            self.check_repo(result)
+            if self.sha(result.get('commit_id')) != params['commit_id']:
+                raise ValueError()
+            if result.get('path') != params['path'] or result.get('side') != params['side']:
+                raise ValueError()
+            if type(result.get('line')) is not int or result['line'] != params['line']:
+                raise ValueError()
+            if 'start_line' in params:
+                if (type(result.get('start_line')) is not int
+                        or result['start_line'] != params['start_line']
+                        or result.get('start_side') != params['start_side']):
+                    raise ValueError()
+            elif result.get('start_line') is not None or result.get('start_side') is not None:
+                raise ValueError()
+            expected_url = f'https://api.github.com/repos/{self.repo}/pulls/{params["number"]}'
+            if 'pull_request_url' in result and str(result['pull_request_url']).lower() != expected_url:
+                raise ValueError()
+            return self.safe(result)
+        except BaseException:
+            raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
+
     def execute(self,action,params,request):
+        if action=='pr_review_comment':return self.review_comment(params,request)
         if action=='contents_read':result=self.contents(params)
         elif action=='branch_create':result=self.create_branch(params)
         else:

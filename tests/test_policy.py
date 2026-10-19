@@ -1,5 +1,5 @@
 import unittest
-from hermes_github_app.actions import ACTIONS, READ_ACTIONS, WRITE_ACTIONS
+from hermes_github_app.actions import ACTIONS, ACTIONS_BY_VERSION, READ_ACTIONS, WRITE_ACTIONS
 from hermes_github_app.policy import Policy, PolicyError
 
 
@@ -14,7 +14,8 @@ class PolicyTests(unittest.TestCase):
             policy.authorize(repo, action)
 
     def test_frozen_profiles_and_explicit_merge(self):
-        self.assertEqual(len(ACTIONS), 14)
+        self.assertEqual(len(ACTIONS_BY_VERSION[1]), 14)
+        self.assertEqual(len(ACTIONS_BY_VERSION[2]), 15)
         self.assertEqual(len(READ_ACTIONS), 8)
         self.assertEqual(len(WRITE_ACTIONS), 13)
         for access, expected in [("read", READ_ACTIONS), ("write", WRITE_ACTIONS)]:
@@ -81,3 +82,34 @@ class PolicyTests(unittest.TestCase):
         p.authorize("acme/repo.git", "contents_read")
         with self.assertRaises(TypeError):
             p.repository_rules["acme/repo.git"] = None
+
+
+class CatalogVersionTests(unittest.TestCase):
+    def test_versioned_explicit_allow_and_deny(self):
+        base = {"repositories": {"mode": "all", "exclude": ["acme/private"]}, "default_access": "write"}
+        for version in [1, 2]:
+            with self.assertRaises(PolicyError):
+                Policy.from_dict(base, version=version).authorize("acme/repo", "pr_review_comment")
+        for field in ["allow_actions", "deny_actions"]:
+            with self.assertRaises(PolicyError):
+                Policy.from_dict(dict(base, **{field: ["pr_review_comment"]}))
+            with self.assertRaises(PolicyError):
+                Policy.from_dict(dict(base, repository_rules={"acme/repo": {field: ["pr_review_comment"]}}))
+        granted = dict(base, allow_actions=["pr_review_comment"])
+        self.assertEqual(Policy.from_dict(granted, version=2).authorize("acme/repo", "pr_review_comment"), "acme/repo")
+        local = dict(base, repository_rules={"acme/repo": {"access": "read", "allow_actions": ["pr_review_comment"]}})
+        Policy.from_dict(local, version=2).authorize("acme/repo", "pr_review_comment")
+        for cfg, repo in [(dict(granted, deny_actions=["pr_review_comment"]), "acme/repo"), (dict(granted, repository_rules={"acme/repo": {"deny_actions": ["pr_review_comment"]}}), "acme/repo"), (granted, "acme/private")]:
+            with self.assertRaises(PolicyError):
+                Policy.from_dict(cfg, version=2).authorize(repo, "pr_review_comment")
+
+    def test_invalid_versions_and_constructed_v1_policy(self):
+        from dataclasses import replace
+        cfg = {"repositories": {"mode": "all", "exclude": []}, "default_access": "read", "allow_actions": ["pr_review_comment"]}
+        valid = Policy.from_dict(cfg, version=2)
+        for version in [1, True, False, 0, 3, "2", None, []]:
+            with self.assertRaises(PolicyError):
+                replace(valid, version=version).authorize("acme/repo", "pr_review_comment")
+        for version in [True, False, 0, 3, "2", None, []]:
+            with self.assertRaises(PolicyError):
+                Policy.from_dict(cfg, version=version)

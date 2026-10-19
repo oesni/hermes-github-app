@@ -155,6 +155,7 @@ def test_package_does_not_bind_hermes_internals():
 
 @pytest.mark.skipif(not os.getenv('HERMES_GITHUB_APP_HERMES_SOURCE'), reason='opt-in real Hermes dispatch')
 def test_native_plugin_api_dispatch(configuration, tmp_path):
+    configuration.write_text(configuration.read_text().replace('version: 1', 'version: 2'))
     source = os.environ['HERMES_GITHUB_APP_HERMES_SOURCE']
     profile = tmp_path / 'profile'
     profile.mkdir()
@@ -186,6 +187,21 @@ ctx = PluginContext(PluginManifest(name="hermes-github-app"), manager)
 plugin.register(ctx)
 assert registry.get_entry("repo_get") is not None
 assert registry.get_entry("github_app_action") is None
+from hermes_github_app.actions import ACTIONS_BY_VERSION
+assert len(ACTIONS_BY_VERSION[2]) == 15
+assert all(registry.get_entry(name) is not None for name in ACTIONS_BY_VERSION[2])
+inline = {"repo": "acme/demo", "number": 1, "body": "Review", "commit_id": "a" * 40,
+          "path": "src.py", "line": 8, "side": "RIGHT", "start_line": 4, "start_side": "RIGHT"}
+for field in ("line", "start_line"):
+    for value in ("4", True):
+        before = service.execute.call_count
+        bad = dict(inline, **{field: value})
+        rejected = model_tools.handle_function_call("pr_review_comment", bad, task_id="default", session_id="native-test", tool_call_id="bad-inline-" + field)
+        assert json.loads(rejected)["code"] == "invalid_arguments", rejected
+        assert service.execute.call_count == before
+accepted = model_tools.handle_function_call("pr_review_comment", inline, task_id="default", session_id="native-test", tool_call_id="good-inline")
+assert json.loads(accepted)["ok"], accepted
+assert service.execute.call_args.args == ("pr_review_comment", "acme/demo", {k: v for k, v in inline.items() if k != "repo"})
 blocked.add("execute_code")
 denied = model_tools.handle_function_call("execute_code", {"code": "1"}, task_id="default", session_id="native-test", tool_call_id="blocked-code")
 assert "existing security hook" in denied
@@ -214,12 +230,12 @@ print("Public registration kept strict arguments and an existing security hook")
 
 
 def test_fourteen_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
-    from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
+    from hermes_github_app.actions import ACTIONS_BY_VERSION, PARAMETER_FIELDS
     monkeypatch.setattr(plugin, 'GitHubClient', Mock())
     ctx = Mock()
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
-    assert set(registrations) == set(ACTIONS)
+    assert set(registrations) == set(ACTIONS_BY_VERSION[1])
     assert len({id(item['handler']) for item in registrations.values()}) == 14
     for action, item in registrations.items():
         schema = item['schema']['parameters']
@@ -259,3 +275,24 @@ def test_startup_diagnostic_categories(configuration, caplog, failure, expected)
     ctx.register_tool.assert_not_called()
     assert expected in caplog.text
     assert 'PRIVATE-SECRET' not in caplog.text
+
+
+def test_v2_registers_inline_tool_with_strict_flat_schema(configuration,monkeypatch):
+    from hermes_github_app.actions import ACTIONS_BY_VERSION
+    configuration.write_text(configuration.read_text().replace('version: 1','version: 2'))
+    monkeypatch.setattr(plugin,'GitHubClient',Mock())
+    service=Mock();monkeypatch.setattr(plugin,'GitHubService',Mock(return_value=service))
+    ctx=Mock();plugin.register(ctx)
+    registered={call.kwargs['name']:call.kwargs for call in ctx.register_tool.call_args_list}
+    assert set(registered)==set(ACTIONS_BY_VERSION[2])
+    item=registered['pr_review_comment'];schema=item['schema']['parameters']
+    assert set(schema['required'])=={'repo','number','body','commit_id','path','line','side'}
+    for name in ('line','start_line'):
+        assert schema['properties'][name]=={'anyOf':[{'type':'integer','minimum':1,'maximum':2**31-1}]}
+    for name in ('side','start_side'):
+        assert schema['properties'][name]['enum']==['LEFT','RIGHT']
+    assert schema['additionalProperties'] is False
+    args={'repo':'acme/demo','number':1,'body':'Comment','commit_id':'a'*40,'path':'src.py','line':True,'side':'RIGHT'}
+    result=json.loads(item['handler'](args))
+    assert result['code']=='invalid_arguments'
+    service.execute.assert_not_called()

@@ -1,6 +1,6 @@
 manifest_version: 2
 name: hermes-github-app
-version: 0.2.0
+version: 0.3.0
 kind: standalone
 description: Host-owned GitHub App credentials with per-repository action policy.
 provides_tools:
@@ -16,6 +16,7 @@ provides_tools:
   - pr_comments_list
   - pr_create
   - pr_comment
+  - pr_review_comment
   - branch_create
   - pr_merge
 python_dependencies:

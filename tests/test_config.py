@@ -40,7 +40,7 @@ class ConfigTests(unittest.TestCase):
                 parse_config(BASE.replace("app_id: 12345", "app_id: " + value))
         cfg = parse_config(BASE.replace("app_id: 12345", "app_id: " + str(2**63 - 1)))
         self.assertEqual(cfg.auth.app_id, 2**63 - 1)
-        for value in ['"1"', "true", "2"]:
+        for value in ['"1"', "true", "3"]:
             with self.assertRaises(ConfigError):
                 parse_config(BASE.replace("version: 1", "version: " + value))
 
@@ -117,3 +117,16 @@ class ConfigTests(unittest.TestCase):
                 for block in [f"  {field}: [{action}]\n", f"  repository_rules: {{acme/a: {{{field}: [{action}]}}}}\n"]:
                     with self.subTest(action=action, field=field, block=block), self.assertRaises(ConfigError):
                         parse_config(BASE + block)
+
+
+class VersionTwoConfigTests(unittest.TestCase):
+    def test_version_two_preserves_version_one_restrictions(self):
+        config = BASE.replace("version: 1", "version: 2") + "  allow_actions: [pr_review_comment]\n"
+        parsed = parse_config(config)
+        self.assertEqual(parsed.version, 2)
+        self.assertEqual(parsed.policy.version, 2)
+        parsed.policy.authorize("acme/repo", "pr_review_comment")
+        with self.assertRaises(ConfigError):
+            parse_config(config.replace("version: 2", "version: 1"))
+        with self.assertRaises(PolicyError):
+            parse_config(BASE.replace("version: 1", "version: 2")).policy.authorize("acme/repo", "pr_review_comment")

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from dataclasses import asdict
-from .actions import ACTIONS, PARAMETER_FIELDS, ActionError, canonical_repo, validate_params
+from .actions import ACTIONS, ACTIONS_BY_VERSION, PARAMETER_FIELDS, ActionError, canonical_repo, validate_params
 from .client import GitHubClient
 from .config import ConfigError, parse_config
 from .isolation import IsolationError
@@ -76,6 +76,8 @@ def register(ctx):
         client.close()
 
     for action in ACTIONS:
+        if action not in ACTIONS_BY_VERSION[config.version]:
+            continue
         handler = make_handler(action)
         schema = tool_schema(action)
         ctx.register_tool(name=action, toolset='github_app', handler=handler,
@@ -91,8 +93,8 @@ def tool_schema(action):
     properties = {'repo': {'type': 'string', 'description': 'Exact owner/repository'}}
     for field in sorted(required | optional):
         prop = {'type': 'string'}
-        if field in {'number', 'page', 'per_page'}:
-            maximum = {'number': 2**31 - 1, 'page': 10000, 'per_page': 100}[field]
+        if field in {'number', 'page', 'per_page', 'line', 'start_line'}:
+            maximum = {'number': 2**31 - 1, 'page': 10000, 'per_page': 100, 'line': 2**31 - 1, 'start_line': 2**31 - 1}[field]
             # Hermes coerces property.type integer/boolean strings before the
             # handler. An equivalent single-branch anyOf preserves the raw
             # JSON value so our strict validator can reject string coercion.
@@ -101,14 +103,20 @@ def tool_schema(action):
             prop = {'anyOf': [{'type': 'boolean'}]}
         elif field == 'state':
             prop['enum'] = ['open', 'closed', 'all']
+        elif field in {'side', 'start_side'}:
+            prop['enum'] = ['LEFT', 'RIGHT']
         elif field == 'merge_method':
             prop['enum'] = ['merge', 'squash', 'rebase']
+        elif field == 'path' and action == 'pr_review_comment':
+            prop['maxLength'] = 4096
         elif field in {'title', 'body'}:
             prop['maxLength'] = 256 if field == 'title' else 65536
         properties[field] = prop
     description = action.replace('_', ' ').capitalize() + ' under host repository policy.'
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
+    if action == 'pr_review_comment':
+        description += ' Add an inline diff comment on the current head of an open PR. Optional start_line/start_side must be paired on the same side.'
     if action == 'pr_merge':
         description += ' Requires explicit policy allowance and the expected PR head SHA; GitHub protections apply.'
     return {'name': action, 'description': description, 'parameters': {
