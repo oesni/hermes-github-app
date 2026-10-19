@@ -14,9 +14,10 @@ def test_candidate_addition_preserves_operator_permissions():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     old = frozenset({'terminal', 'orpheus_spawn', 'existing_security_tool'})
-    candidate = module.add_candidate_actions(old, ACTIONS)
+    public_tools = {'github_' + action for action in ACTIONS}
+    candidate = module.add_candidate_actions(old, public_tools)
     assert old <= candidate
-    assert candidate - old == set(ACTIONS)
+    assert candidate - old == public_tools
     assert old == frozenset({'terminal', 'orpheus_spawn', 'existing_security_tool'})
 
 
@@ -50,4 +51,4 @@ def test_directory_manifest_matches_action_catalog():
     source = Path(__file__).resolve().parents[1]
     manifest = YAML(typ='safe').load((source / 'plugin.yaml').read_text())
     assert len(manifest['provides_tools']) == len(ACTIONS)
-    assert set(manifest['provides_tools']) == set(ACTIONS)
+    assert set(manifest['provides_tools']) == {'github_' + action for action in ACTIONS}

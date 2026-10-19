@@ -1,3 +1,4 @@
+# Public tool: github_pr_review_comment; policy action stays pr_review_comment.
 version: 1
 auth:
   app_id: 12345
