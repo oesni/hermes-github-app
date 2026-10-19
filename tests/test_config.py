@@ -130,3 +130,12 @@ class VersionTwoConfigTests(unittest.TestCase):
             parse_config(config.replace("version: 2", "version: 1"))
         with self.assertRaises(PolicyError):
             parse_config(BASE.replace("version: 1", "version: 2")).policy.authorize("acme/repo", "pr_review_comment")
+
+    def test_inline_review_example_is_scoped_and_cannot_merge(self):
+        path = Path(__file__).resolve().parents[1] / "examples/inline-review.yaml"
+        config = parse_config(path.read_bytes())
+        self.assertEqual(config.version, 2)
+        self.assertEqual(config.policy.authorize("Acme/Demo", "pr_review_comment"), "acme/demo")
+        for repo, action in [("acme/other", "pr_review_comment"), ("acme/demo", "pr_merge"), ("acme/demo", "issue_create")]:
+            with self.subTest(repo=repo, action=action), self.assertRaises(PolicyError):
+                config.policy.authorize(repo, action)

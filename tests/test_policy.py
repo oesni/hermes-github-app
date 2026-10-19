@@ -113,3 +113,10 @@ class CatalogVersionTests(unittest.TestCase):
         for version in [True, False, 0, 3, "2", None, []]:
             with self.assertRaises(PolicyError):
                 Policy.from_dict(cfg, version=version)
+
+    def test_v2_global_deny_overrides_repository_inline_allow(self):
+        config = {"repositories": {"mode": "all", "exclude": []}, "default_access": "write",
+                  "deny_actions": ["pr_review_comment"],
+                  "repository_rules": {"acme/repo": {"access": "read", "allow_actions": ["pr_review_comment"]}}}
+        with self.assertRaises(PolicyError):
+            Policy.from_dict(config, version=2).authorize("acme/repo", "pr_review_comment")

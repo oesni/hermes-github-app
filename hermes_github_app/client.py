@@ -306,7 +306,9 @@ class Session:
             expected_url = f'https://api.github.com/repos/{self.repo}/pulls/{params["number"]}'
             if 'pull_request_url' in result and str(result['pull_request_url']).lower() != expected_url:
                 raise ValueError()
-            return self.safe(result)
+            fields = ('id', 'html_url', 'pull_request_url', 'commit_id', 'path',
+                      'line', 'side', 'start_line', 'start_side', 'created_at')
+            return self.safe({field: result[field] for field in fields if field in result})
         except BaseException:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 

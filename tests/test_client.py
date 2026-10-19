@@ -307,12 +307,13 @@ def inline_result(**overrides):
 @pytest.mark.parametrize('multiline',[False,True])
 def test_inline_comment_pins_commit_and_uses_minimal_permissions(key_file,side,multiline):
     params=inline_params(side=side,**({'start_line':4,'start_side':side} if multiline else {}))
-    response=inline_result(**{**{k:v for k,v in params.items() if k!='number'},'body':'secret-token'})
+    response=inline_result(**{**{k:v for k,v in params.items() if k!='number'},'body':'secret-token','html_url':'https://github.com/acme/demo/pull/1#secret-token'})
     # Fork heads are permitted: this creates a comment on the selected base PR.
     target=merge_pr(head={'ref':'feature','sha':SHA,'repo':{'full_name':'fork/demo'}})
     api=API(key_file,{'/pulls/1':target,('POST','/pulls/1/comments'):response})
     result=api.run('pr_review_comment',params)
-    assert result['id']==42 and result['body']=='[REDACTED]'
+    assert result['id']==42 and result['html_url']=='https://github.com/acme/demo/pull/1#[REDACTED]'
+    assert 'body' not in result
     assert json.loads(api.calls[0].content)['permissions']=={'pull_requests':'write'}
     mutation=api.calls[-1]
     assert mutation.method=='POST' and mutation.url.path=='/repos/acme/demo/pulls/1/comments'
@@ -353,4 +354,16 @@ def test_inline_response_mismatch_is_uncertain(key_file,override):
     api=API(key_file,{'/pulls/1':merge_pr(),('POST','/pulls/1/comments'):inline_result(**override)})
     with pytest.raises(ClientError) as caught:api.run('pr_review_comment',inline_params())
     assert caught.value.code=='uncertain_outcome'
+    assert len(api.calls)==5
+
+
+def test_inline_response_returns_only_comment_metadata(key_file):
+    response=inline_result(html_url='https://github.com/acme/demo/pull/1#discussion_r42',
+        created_at='secret-token', diff_hunk='@@ -1 +1 @@\n-secret repository source',
+        body='comment body', user={'login':'author'}, arbitrary={'content':'private content'})
+    api=API(key_file,{'/pulls/1':merge_pr(),('POST','/pulls/1/comments'):response})
+    result=api.run('pr_review_comment',inline_params())
+    assert result=={key:('[REDACTED]' if key=='created_at' else response[key]) for key in
+        ('id','html_url','pull_request_url','commit_id','path','line','side','created_at')}
+    assert not {'body','diff_hunk','user','arbitrary','start_line','start_side'} & result.keys()
     assert len(api.calls)==5

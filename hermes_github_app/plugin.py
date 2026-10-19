@@ -116,7 +116,7 @@ def tool_schema(action):
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
     if action == 'pr_review_comment':
-        description += ' Add an inline diff comment on the current head of an open PR. Optional start_line/start_side must be paired on the same side.'
+        description += ' Add an inline diff comment to an open PR whose head matched commit_id when checked. Optional start_line/start_side must be paired on the same side.'
     if action == 'pr_merge':
         description += ' Requires explicit policy allowance and the expected PR head SHA; GitHub protections apply.'
     return {'name': action, 'description': description, 'parameters': {
