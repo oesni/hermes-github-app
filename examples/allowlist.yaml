@@ -1,0 +1,21 @@
+version: 1
+auth:
+  app_id: 12345
+  installation_id: 67890
+  private_key_path: /secure/github-app/private-key.pem
+policy:
+  repositories:
+    mode: allowlist
+    allow: [acme/*]
+    exclude: [acme/payroll]
+  default_access: read
+  allow_actions: [issue_comment]
+  deny_actions: [pr_merge]
+  repository_rules:
+    acme/support:
+      access: write
+      allow_actions: [pr_merge]
+    acme/archive:
+      access: read
+      deny_actions: [issue_comment]
+    acme/inherits: {}

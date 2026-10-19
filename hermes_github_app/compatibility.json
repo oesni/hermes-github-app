@@ -1,0 +1,19 @@
+{
+  "model_tools.py": "556dcd3ab2549e0c663dd87c9abc30e1acc2b4e25cca0189931b3c98c63c52a5",
+  "toolsets.py": "e4fc68b2d7d66941ecf7287ca90823f1c36b22b595f8bca42e54a6310f3f8609",
+  "tools/terminal_tool.py": "fd83407c03c22144658fe8c224127aa2191e0bf28d5bf6aab342e459843022ac",
+  "tools/file_tools.py": "c664bcdb5e440677d4ee456c2b6fae730f31089e18ebb900bea03db27f4d27ce",
+  "tools/file_operations.py": "735d3fad73aa3327a22609d0aab8bcdee39fbd244729ef24b065b1e4cd2afcd3",
+  "tools/process_registry.py": "647ddd3b959d0053a076c991a6d67a63e4242356125ca0c9ad6161cb872f70fd",
+  "tools/environments/docker.py": "12904ba0231f7bc6a042b33979cad2d70e96c3fa9761f71bb49a65d26d5dcdc3",
+  "tools/credential_files.py": "e424824cf2275013b2c5ec62a08840fc6585b247147bf0df295a48931b48e58b",
+  "tools/env_passthrough.py": "882101f442ecf02d28b7d96a72f5ad2891dd43a93b4f2ca8e4a7ed7688eaef63",
+  "tools/registry.py": "1fff28948e5714763c26279f40a0188b657243942f8ad8e157a672c453515aef",
+  "hermes_cli/plugins.py": "fb60534b86b403778232eb63842bba563448a15419b1a43c7fced2274b7601c4",
+  "hermes_cli/middleware.py": "699f514c4f437670e345277de7b105a8a7b18e052af68b1a2bbef904eef99f6c",
+  "agent/tool_executor.py": "4d42f9cf8ba7ed556aaacdc6d4c82cd67b2d3d68a8163ec763827851ee15d592",
+  "agent/agent_runtime_helpers.py": "ed9e1eddaf598c6e61a107f248449bb994be688dca24bd452772b390b309f3d8",
+  "gateway/run.py": "e2fd0c9a6b93c2ef2c14556c7a104f1c6c159c25b6c13ce109f758db6ae093d8",
+  "tools/read_extract.py": "f52f0679220c068926ea865b141ff116c342a151413c6dcbaceff96040aae772",
+  "hermes_constants.py": "92ce967cb86e4ab3dd9dbb3ec657c1b7e4c603057109083d2a173a69cc431ede"
+}

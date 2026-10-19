@@ -1,0 +1,5 @@
+include AGENTS.md
+include __init__.py
+include plugin.yaml
+recursive-include examples *.yaml
+recursive-include docs *.md
