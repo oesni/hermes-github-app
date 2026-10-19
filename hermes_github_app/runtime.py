@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 import sys
 import threading
+import inspect
 from .actions import ACTIONS
 from .isolation import IsolationError, _guard_isolation
 
@@ -46,6 +47,8 @@ class HermesRuntime:
         self.config_path, self.key_path = config_path, key_path
         self.closed = False
         self.handlers = {}
+        self._original_creator = None
+        self._creator = None
         self._fingerprints = json.loads(Path(__file__).with_name('compatibility.json').read_text())
 
     def check_configuration(self):
@@ -56,6 +59,15 @@ class HermesRuntime:
                 raise IsolationError('Unsupported Hermes runtime revision')
         from hermes_cli.config import load_config_readonly
         config = load_config_readonly()
+        if self._creator is not None and terminal_tool._create_environment is not self._creator:
+            raise IsolationError('Environment constructor was replaced')
+        gateway = sys.modules.get('gateway.run')
+        if gateway is not None:
+            runner = gateway._gateway_runner_ref()
+            if runner is not None:
+                hooks = getattr(runner, 'hooks', None)
+                if hooks is None or getattr(hooks, '_handlers', None) or getattr(hooks, 'loaded_hooks', None):
+                    raise IsolationError('Gateway directory hooks are unsupported')
         selections = [config.get('toolsets')]
         platforms = config.get('platform_toolsets', {})
         if not isinstance(platforms, dict):
@@ -116,7 +128,7 @@ class HermesRuntime:
 
     def middleware(self, *, tool_name, args, next_call, session_id='', task_id='', tool_call_id='', **kwargs):
         if tool_name not in {*SUPPORTED_TOOLS, *ACTIONS}:
-            return json.dumps({'ok': False, 'error': 'isolation_refused'})
+            return json.dumps({'ok': False, 'code': 'isolation_refusal', 'error': 'Host isolation could not be established.'})
         try:
             if not all(isinstance(v, str) and v for v in (session_id, task_id, tool_call_id)):
                 raise IsolationError('Host call identity unavailable')
@@ -124,16 +136,63 @@ class HermesRuntime:
             call = HostCall(self, agent, session_id, task_id, tool_call_id,
                             f'{id(self)}:{id(agent)}:{session_id}:{task_id}:{tool_call_id}')
             self.check(call)
-            self.prepare_tool(tool_name, args, call)
             token = _CURRENT_CALL.set(call)
             try:
+                self.prepare_tool(tool_name, args, call)
+                if tool_name == "read_file":
+                    return self.read_sandbox_file(args, call)
                 return next_call(args)
             finally:
                 _CURRENT_CALL.reset(token)
         except Exception:
-            return json.dumps({'ok': False, 'error': 'isolation_refused'})
+            return json.dumps({'ok': False, 'code': 'isolation_refusal', 'error': 'Host isolation could not be established.'})
+
+    def read_sandbox_file(self, args, call):
+        # Bypass the upstream host extraction/stat/dedup helper entirely.
+        # ShellFileOperations reads and stats through its Docker environment.
+        from tools import file_tools
+        if not isinstance(args, dict) or set(args) - {'path', 'offset', 'limit'} or not isinstance(args.get('path'), str):
+            raise IsolationError('Invalid sandbox read arguments')
+        if file_tools._is_blocked_device(args['path']):
+            return json.dumps({'error': 'Device files cannot be read.'})
+        ops = file_tools._get_file_ops(call.task_id)
+        self.check(call)
+        result = ops.read_file(args['path'], offset=args.get('offset', 1), limit=args.get('limit', 500)).to_dict()
+        content = result.get('content', '')
+        if len(content) > file_tools._get_max_read_chars():
+            return json.dumps({'error': 'Read exceeds the output limit; use a smaller range.'})
+        if content:
+            result['content'] = file_tools.redact_sensitive_text(content, code_file=True)
+        return json.dumps(result, ensure_ascii=False)
+
+    def install_environment_guard(self):
+        from tools import terminal_tool
+        original = terminal_tool._create_environment
+        signature = inspect.signature(original)
+        def create(*args, **kwargs):
+            call = _CURRENT_CALL.get()
+            if call is None or call.runtime is not self or call.cancelled():
+                raise IsolationError('Trusted host dispatch required for environment creation')
+            bound = signature.bind(*args, **kwargs)
+            if bound.arguments.get('env_type') != 'docker':
+                raise IsolationError('Docker environment required')
+            config = dict(bound.arguments.get('container_config') or {})
+            config['docker_persist_across_processes'] = False
+            bound.arguments['container_config'] = config
+            return original(*bound.args, **bound.kwargs)
+        self._original_creator, self._creator = original, create
+        terminal_tool._create_environment = create
 
     def prepare_tool(self, name, args, call):
+        if name == 'read_file':
+            from tools import file_tools, terminal_tool
+            from tools.read_extract import is_extractable_document
+            resolved = file_tools._resolve_path_for_task(args.get('path', ''), call.task_id)
+            from hermes_constants import get_config_path, get_env_path
+            protected = [Path(get_config_path()), Path(get_env_path()), Path(self.config_path), Path(self.key_path), Path(__file__).resolve().parent.parent,
+                         Path(terminal_tool.__file__).resolve().parent.parent, Path(sys.prefix)]
+            if is_extractable_document(str(resolved)) or any(resolved == p or p in resolved.parents or resolved in p.parents for p in protected):
+                raise IsolationError('Host extraction and protected host paths are unsupported')
         if name in {'read_file', 'write_file', 'patch', 'search_files'}:
             # The supported Hermes revision omits persist_across_processes in
             # its file-first environment creator. Initialize through terminal's
@@ -173,3 +232,7 @@ class HermesRuntime:
 
     def close(self):
         self.closed = True
+        if self._creator is not None:
+            from tools import terminal_tool
+            if terminal_tool._create_environment is self._creator:
+                terminal_tool._create_environment = self._original_creator

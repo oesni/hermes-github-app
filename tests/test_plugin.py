@@ -82,10 +82,11 @@ def test_direct_registry_bypass_refused_and_runtime_snapshot(configuration, monk
     client = Mock()
     monkeypatch.setattr(plugin, 'GitHubClient', Mock(return_value=client))
     monkeypatch.setattr(HermesRuntime, 'check', lambda *args: None)
+    monkeypatch.setattr(HermesRuntime, 'install_environment_guard', lambda *args: None)
     ctx = Mock()
     plugin.register(ctx)
     handler = ctx.register_tool.call_args.kwargs['handler']
-    assert json.loads(handler({'repo':'acme/demo'}))['error']=='isolation_refused'
+    assert json.loads(handler({'repo':'acme/demo'}))['code']=='isolation_refusal'
     ctx.register_middleware.assert_called_once()
 
 
@@ -147,12 +148,12 @@ assert context.session_id=="native-test" and not context.cancelled()
 for tool,bad in [("issue_get",{"repo":"acme/demo","number":"42"}), ("pr_create",{"repo":"acme/demo","title":"t","base":"main","head":"feature","draft":"false"}), ("repo_get",{"repo":"acme/demo","action":"repo_get"})]:
     before=service.execute.call_count
     rejected=model_tools.handle_function_call(tool,bad,task_id="default",session_id="native-test",tool_call_id="bad-"+tool,enabled_tools=list(agent.valid_tool_names))
-    assert json.loads(rejected)["error"]=="invalid_arguments",rejected
+    assert json.loads(rejected)["code"]=="invalid_arguments",rejected
     assert service.execute.call_count==before
 accepted=model_tools.handle_function_call("issue_get",{"repo":"acme/demo","number":42},task_id="default",session_id="native-test",tool_call_id="good-int",enabled_tools=list(agent.valid_tool_names))
 assert json.loads(accepted)["ok"],accepted
 assert service.execute.call_args.args==("issue_get","acme/demo",{"number":42})
-assert json.loads(registry.dispatch("repo_get",args))["error"]=="isolation_refused"
+assert json.loads(registry.dispatch("repo_get",args))["code"]=="isolation_refusal"
 # Exercise the native file-first preparation contract without creating a second
 # Docker test environment: only the environment constructor boundary is mocked.
 from tools import terminal_tool
@@ -174,12 +175,69 @@ try:
         creator.assert_called_once()
 finally:
     terminal_tool._active_environments.pop(key,None)
+# Native resolver rejects extraction before the host extraction function runs,
+# including a symlink whose requested name hides its document extension.
+from pathlib import Path
+from hermes_github_app.isolation import IsolationError
+from tools import read_extract
+probe=Path(os.environ["HERMES_HOME"])/"secret.docx"
+probe.write_text("TEST-ONLY-NOT-A-DOCUMENT")
+alias=probe.with_name("innocent.txt")
+alias.symlink_to(probe)
+for path in [str(probe),str(alias),runtime.config_path,runtime.key_path]:
+    with patch.object(read_extract,"extract_document_text",side_effect=AssertionError("host extraction reached")):
+        try:
+            runtime.prepare_tool("read_file",{"path":path},context)
+        except IsolationError:
+            pass
+        else:
+            raise AssertionError("unsafe host read accepted")
+# Read routing bypasses the host read helper even if a path changes after
+# validation: all content and stat operations belong to ShellFileOperations.
+from tools import file_tools
+ops=Mock()
+ops.read_file.return_value.to_dict.return_value={"content":"sandbox-only","file_size":12}
+with patch.object(file_tools,"_get_file_ops",return_value=ops), patch.object(runtime,"check"), patch.object(file_tools,"read_file_tool",side_effect=AssertionError("host reader reached")):
+    routed=json.loads(runtime.read_sandbox_file({"path":"/workspace/example","offset":2,"limit":3},context))
+    assert routed["content"]=="sandbox-only"
+    ops.read_file.assert_called_once_with("/workspace/example",offset=2,limit=3)
+# A file-helper recreation must force reuse off even when the native caller
+# omits the setting (the idle-reaper race); no container is created here.
+from hermes_github_app.runtime import _CURRENT_CALL
+original=runtime._original_creator
+seen=[]
+def constructor(env_type,image,cwd,timeout,ssh_config=None,container_config=None,local_config=None,task_id="default",host_cwd=None):
+    seen.append(container_config)
+    return object()
+with patch.object(terminal_tool,"_create_environment",constructor):
+    runtime.install_environment_guard()
+    token=_CURRENT_CALL.set(context)
+    try:
+        terminal_tool._create_environment("docker","test","/workspace",10,container_config={})
+        assert seen[-1]["docker_persist_across_processes"] is False
+    finally:
+        _CURRENT_CALL.reset(token)
+        runtime.close()
+runtime.closed=False
+runtime._creator=terminal_tool._create_environment
+runtime._original_creator=original
+# Directory hooks are a separate surface from plugin hooks.
+import types
+fakegateway=types.ModuleType("gateway.run")
+fakegateway._gateway_runner_ref=lambda: SimpleNamespace(hooks=SimpleNamespace(_handlers={"agent:start":[object()]},loaded_hooks=[]))
+with patch.dict(sys.modules,{"gateway.run":fakegateway}):
+    try:
+        runtime.check_configuration()
+    except IsolationError:
+        pass
+    else:
+        raise AssertionError("gateway directory hooks accepted")
 from hermes_cli.plugins import get_pre_tool_call_block_message
 assert get_pre_tool_call_block_message("execute_code",{})
 assert not get_pre_tool_call_block_message("terminal",{})
 agent.valid_tool_names.add("execute_code")
 result=model_tools.handle_function_call("repo_get",args,task_id="default",session_id="native-test",tool_call_id="call-2",enabled_tools=list(agent.valid_tool_names))
-assert json.loads(result)["error"]=="isolation_refused"
+assert json.loads(result)["code"]=="isolation_refusal"
 agent._interrupt_requested=True
 assert context.cancelled()
 print("Real native middleware/dispatch and context rejection passed")
@@ -196,6 +254,7 @@ def test_fourteen_flat_tools_are_registered_with_distinct_handlers(configuration
     from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
     monkeypatch.setattr(plugin, 'GitHubClient', Mock())
     monkeypatch.setattr(HermesRuntime, 'check', lambda *args: None)
+    monkeypatch.setattr(HermesRuntime, 'install_environment_guard', lambda *args: None)
     ctx = Mock()
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
@@ -210,3 +269,32 @@ def test_fourteen_flat_tools_are_registered_with_distinct_handlers(configuration
         assert 'action' not in schema['properties'] and 'params' not in schema['properties']
     assert registrations['issue_get']['schema']['parameters']['properties']['number'] == {'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': 2**31-1}]}
     assert registrations['pr_create']['schema']['parameters']['properties']['draft'] == {'anyOf': [{'type': 'boolean'}]}
+
+
+@pytest.mark.parametrize('failure, expected', [
+    ('config_missing', 'config_path path'),
+    ('config_mode', 'config_path permissions'),
+    ('key_missing', 'private_key path'),
+    ('key_mode', 'private_key permissions'),
+    ('yaml', 'YAML'),
+    ('field', 'field'),
+])
+def test_startup_diagnostic_categories(configuration, caplog, failure, expected):
+    key = configuration.parent / 'key.pem'
+    if failure == 'config_missing':
+        configuration.unlink()
+    elif failure == 'config_mode':
+        configuration.chmod(0o644)
+    elif failure == 'key_missing':
+        key.unlink()
+    elif failure == 'key_mode':
+        key.chmod(0o644)
+    elif failure == 'yaml':
+        configuration.write_text('version: [unterminated')
+    else:
+        configuration.write_text('version: 1\nunknown: PRIVATE-SECRET')
+    ctx = Mock()
+    plugin.register(ctx)
+    ctx.register_tool.assert_not_called()
+    assert expected in caplog.text
+    assert 'PRIVATE-SECRET' not in caplog.text

@@ -74,10 +74,11 @@ def test_actual_view_human_confirmation_and_untrusted_text(live_client):
     assert before + 599 < deadline <= time.monotonic() + 600
     _, body, kwargs, message = live_client.sent[0]
     assert 'HOST GITHUB MERGE CONFIRMATION' in body
-    assert 'Untrusted PR-author title:' in body
-    assert '\\*\\*unsafe\\*\\*' in body
-    assert '@everyone' not in body
-    assert 'base branch can be retargeted' in body
+    embed = kwargs['embed']
+    title_field = next(field for field in embed.fields if field.name == 'Untrusted PR-author title')
+    assert '\\*\\*unsafe\\*\\*' in title_field.value
+    assert '@everyone' not in title_field.value
+    assert 'base branch can be retargeted' in embed.description
     assert kwargs['allowed_mentions'].everyone is False
     assert len(kwargs['view'].children) == 2
     assert kwargs['view'].children[0].custom_id != kwargs['view'].children[1].custom_id
@@ -184,3 +185,24 @@ def test_same_loop_is_refused_without_deadlock(live_client):
         return adapter.present('host-call', TARGET, time.monotonic() + 600, Mock())
     assert asyncio.run_coroutine_threadsafe(call(), live_client.loop).result(2) is False
     assert not live_client.sent
+
+
+def test_maximum_confirmation_uses_bounded_embed_and_single_line_title(live_client):
+    target={**TARGET,'repo':'a'*39+'/'+'b'*100,'head_branch':'_'*255,'base_branch':'_'*255,
+        'title':'unsafe\nBASE: spoof\r\t\u202e\u2066@everyone'+'*'*500}
+    adapter=DiscordApprovalAdapter(['123'],lambda:live_client)
+    assert adapter.available() is True
+    assert adapter.present('host-call',target,time.monotonic()+600,Mock())
+    _,content,kwargs,_=live_client.sent[0]
+    embed=kwargs['embed']
+    assert len(content)<=2000 and len(embed)<=6000
+    assert all(len(field.value)<=1024 for field in embed.fields)
+    title=next(field.value for field in embed.fields if field.name=='Untrusted PR-author title')
+    assert all(character not in title for character in ('\n','\r','\t','\u202e','\u2066','@everyone'))
+    assert 'base branch can be retargeted' in embed.description
+    assert next(field.value for field in embed.fields if field.name=='Expected head')==target['expected_head_sha']
+    adapter.close()
+
+
+def test_disconnected_adapter_not_available():
+    assert DiscordApprovalAdapter(['123'],lambda:None).available() is False

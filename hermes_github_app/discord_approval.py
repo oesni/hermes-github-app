@@ -5,6 +5,7 @@ import secrets
 import sys
 import threading
 import time
+import unicodedata
 
 
 def active_discord_client():
@@ -36,6 +37,14 @@ class DiscordApprovalAdapter:
         self._lock = threading.Lock()
         self._requests = {}
 
+    def available(self):
+        try:
+            client = self._client_provider()
+            return bool(self.approver_ids and client is not None and client.loop.is_running()
+                        and not _same_loop(client.loop))
+        except Exception:
+            return False
+
     def present(self, request_id, target, deadline, on_decision):
         client = self._client_provider()
         if client is None or not self.approver_ids:
@@ -60,17 +69,31 @@ class DiscordApprovalAdapter:
 
     async def _present(self, client, request_id, target, state, on_decision):
         import discord
-        title = discord.utils.escape_mentions(discord.utils.escape_markdown(str(target['title'])))[:500]
-        # Target identities have been validated by the action/service layer;
-        # escaping again prevents branch names from affecting presentation.
+        # Render the complete approved tuple separately from untrusted author text.
+        # A bounded embed avoids Discord's 2000-character message limit even for
+        # maximum-length escaped branch names. Author controls cannot spoof rows.
+        raw_title = ''.join(' ' if ch.isspace() else ch for ch in str(target['title'])
+                            if unicodedata.category(ch) not in {'Cc', 'Cf'} or ch.isspace())
         esc = lambda v: discord.utils.escape_mentions(discord.utils.escape_markdown(str(v)))
-        body = ('HOST GITHUB MERGE CONFIRMATION — human approval required\n'
-                f"Repository: {esc(target['repo'])}\nPR: {target['number']}\n"
-                f"Base branch: {esc(target['base_branch'])}\nHead branch: {esc(target['head_branch'])}\n"
-                f"Expected head: {esc(target['expected_head_sha'])}\nMethod: {esc(target['merge_method'])}\n"
-                f"PR: {target['url']}\nUntrusted PR-author title: {title}\n"
-                'Risk: GitHub atomically checks the head SHA, but the base branch can be retargeted '
-                'between the final check and merge. Approval expires in 10 minutes and permits one attempt. The administrator must configure this App without protection bypass grants.')
+        title = esc(raw_title)[:500]
+        body = 'HOST GITHUB MERGE CONFIRMATION — human approval required'
+        embed = discord.Embed(title='Specific human merge authorization', description=(
+            'Risk: GitHub atomically checks the head SHA, but the base branch can be retargeted '
+            'between the final check and merge. Approval expires in 10 minutes and permits one attempt. '
+            'The administrator must configure this App without protection bypass grants.'))
+        for label, value in (
+            ('Repository', target['repo']), ('PR number', target['number']),
+            ('Base branch', target['base_branch']), ('Head branch', target['head_branch']),
+            ('Expected head', target['expected_head_sha']), ('Merge method', target['merge_method']),
+            ('Verified PR link', target['url']),
+        ):
+            value = esc(value)
+            if len(value) > 1024:
+                return False
+            embed.add_field(name=label, value=value, inline=False)
+        embed.add_field(name='Untrusted PR-author title', value=title or '(empty)', inline=False)
+        if len(embed) > 6000:
+            return False
         for user_id in self.approver_ids:
             try:
                 user = await client.fetch_user(int(user_id))
@@ -99,7 +122,7 @@ class DiscordApprovalAdapter:
                         await interaction.response.send_message('Decision recorded for this host request.', ephemeral=True)
                     button.callback = callback
                     view.add_item(button)
-                message = await user.send(body, view=view, allowed_mentions=discord.AllowedMentions.none())
+                message = await user.send(body, embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
                 message_binding.update(user=user_id, message=message.id, channel=message.channel.id)
                 with self._lock:
                     active = state['active']

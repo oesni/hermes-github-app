@@ -4,6 +4,17 @@ from .approvals import ApprovalError
 from .client import ClientError
 from .policy import PolicyError
 
+class IsolationError(Exception):
+    pass
+
+
+def check_isolation(callback):
+    try:
+        callback()
+    except Exception:
+        raise IsolationError() from None
+
+
 class GitHubService:
     def __init__(self,policy,client,approvals=None):
         self.policy,self.client,self.approvals=policy,client,approvals
@@ -12,11 +23,11 @@ class GitHubService:
         try:
             if recheck_isolation is None:
                 return {'ok':False,'code':'isolation_refusal','error':'Trusted isolation context is unavailable.'}
-            recheck_isolation()
+            check_isolation(recheck_isolation)
             canonical=self.policy.authorize(repo,action)
             params=validate_params(action,params)
             request=build_request(action,canonical,params)
-            if action=='pr_merge' and (self.approvals is None or context is None):
+            if action=='pr_merge' and (self.approvals is None or context is None or not self.approvals.available()):
                 raise ApprovalError('approval_required_unavailable')
             session=self.client.session(canonical,ACTIONS[action].permissions)
             # Session establishes GitHub's canonical name; policy must cover it too.
@@ -25,7 +36,7 @@ class GitHubService:
                 return {'ok':True,'data':session.execute(action,params,request)}
             target=session.inspect_merge(params)
             def recheck():
-                recheck_isolation()
+                check_isolation(recheck_isolation)
                 self.policy.authorize(canonical,action)
                 # Fresh token/metadata/prerequisites after the potentially long wait.
                 nonlocal session
@@ -42,5 +53,7 @@ class GitHubService:
             return {'ok':False,'code':exc.code,'error':exc.code}
         except ClientError as exc:
             return {'ok':False,'code':exc.code,'error':str(exc)}
+        except IsolationError:
+            return {'ok':False,'code':'isolation_refusal','error':'Trusted calling context check failed.'}
         except Exception:
-            return {'ok':False,'code':'isolation_refusal','error':'Trusted calling context or operation failed.'}
+            return {'ok':False,'code':'github_unavailable','error':'GitHub operation failed.'}

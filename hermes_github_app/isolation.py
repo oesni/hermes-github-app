@@ -20,6 +20,14 @@ def _check_mount(source, protected):
         raise IsolationError('Unsafe Docker mount')
 
 
+def _capabilities(value):
+    if value is None:
+        return set()
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise IsolationError('Cannot verify Docker capabilities')
+    return {item.upper().removeprefix('CAP_') for item in value}
+
+
 def _inspect_container(environment, protected, allowed_mounts):
     # Do not trust only current settings: a cached environment may have been
     # created with different mounts or namespace privileges earlier.
@@ -41,11 +49,11 @@ def _inspect_container(environment, protected, allowed_mounts):
     host = data[0]['HostConfig']
     if host.get('Privileged') or host.get('PidMode') == 'host' or host.get('IpcMode') == 'host' or host.get('NetworkMode') not in {'bridge', 'default', 'none'} or host.get('Devices') or host.get('VolumesFrom'):
         raise IsolationError('Unsafe Docker privileges')
-    if 'ALL' not in (host.get('CapDrop') or []) or not set(host.get('SecurityOpt', [])) & {'no-new-privileges', 'no-new-privileges:true', 'no-new-privileges=true'}:
+    if 'ALL' not in _capabilities(host.get('CapDrop')) or not set(host.get('SecurityOpt', [])) & {'no-new-privileges', 'no-new-privileges:true', 'no-new-privileges=true'}:
         raise IsolationError('Docker hardening unavailable')
     if set(host.get('SecurityOpt', [])) - {'no-new-privileges', 'no-new-privileges:true', 'no-new-privileges=true'}:
         raise IsolationError('Unsafe Docker security profile')
-    if set(host.get('CapAdd') or []) - {'DAC_OVERRIDE', 'CHOWN', 'FOWNER', 'SETGID', 'SETUID'}:
+    if _capabilities(host.get('CapAdd')) - {'DAC_OVERRIDE', 'CHOWN', 'FOWNER', 'SETGID', 'SETUID'}:
         raise IsolationError('Unsafe Docker capabilities')
     for mount in data[0].get('Mounts', []):
         if mount.get('Type') != 'bind':
@@ -68,6 +76,7 @@ def _guard_isolation(config_path, key_path, task_id=None):
     from tools.credential_files import get_credential_file_mounts, get_skills_directory_mount, get_cache_directory_mounts
     from tools.environments.base import get_sandbox_dir
     from tools.env_passthrough import get_all_passthrough
+    from hermes_constants import get_config_path, get_env_path
 
     config = terminal_tool._get_env_config()
     if config.get('env_type') != 'docker':
@@ -80,7 +89,8 @@ def _guard_isolation(config_path, key_path, task_id=None):
     if get_all_passthrough() or get_credential_file_mounts():
         raise IsolationError('Credential forwarding is not supported')
     protected = [Path(config_path), Path(key_path), Path(__file__).resolve().parent.parent,
-                 Path(terminal_tool.__file__).resolve().parent.parent, Path(sys.prefix)]
+                 Path(terminal_tool.__file__).resolve().parent.parent, Path(sys.prefix),
+                 Path(get_config_path()), Path(get_env_path())]
     sandbox = Path(get_sandbox_dir())
     if any(p.is_symlink() for p in [sandbox, *sandbox.parents]):
         raise IsolationError('Sandbox symlinks are unsupported')

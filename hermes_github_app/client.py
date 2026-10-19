@@ -174,7 +174,7 @@ class Session:
         if (branch is None)==(tag is None):raise ClientError("Missing or ambiguous GitHub reference.","invalid_arguments")
         return self.peel(branch if branch is not None else tag)
     def target(self,number,pull):
-        value=self.get('/pulls/'+str(number) if pull else '/issues/'+str(number))
+        value=self.get('/pulls/'+str(number) if pull else '/issues/'+str(number),missing=True)
         if not isinstance(value,dict) or (not pull and 'pull_request' in value):
             raise ClientError("GitHub action target type is not permitted.","invalid_arguments")
         if value.get('number')!=number:raise ClientError("GitHub target mismatch.","target_changed")
@@ -246,9 +246,12 @@ class Session:
         commit=self.get('/git/commits/'+sha)
         if not isinstance(commit,dict) or self.sha(commit.get('sha'))!=sha:raise ClientError("Unverifiable source commit.")
         result=self.request('POST','/git/refs',body={'ref':'refs/heads/'+name,'sha':sha},mutation=True).data
-        if not isinstance(result,dict) or result.get('ref')!='refs/heads/'+name or result.get('object',{}).get('sha')!=sha:
-            raise ClientError("GitHub mutation outcome is uncertain.","uncertain_outcome")
-        return {'branch':name,'sha':sha}
+        try:
+            if not isinstance(result,dict) or result.get('ref')!='refs/heads/'+name or not isinstance(result.get('object'),dict) or result['object'].get('sha')!=sha:
+                raise ValueError()
+            return {'branch':name,'sha':sha}
+        except BaseException:
+            raise ClientError("GitHub mutation outcome is uncertain.","uncertain_outcome") from None
 
     def inspect_merge(self,params):
         value=self.target(params['number'],True)
@@ -258,7 +261,7 @@ class Session:
                 raise ValueError()
             from .actions import valid_ref
             base=valid_ref(value['base']['ref'],branch=True);head=valid_ref(value['head']['ref'],branch=True)
-            if self.metadata.get({'merge':'allow_merge_commit','squash':'allow_squash_merge','rebase':'allow_rebase_merge'}[params['merge_method']]) is not True:raise ValueError()
+            if self.metadata.get({'merge':'allow_merge_commit','squash':'allow_squash_merge','rebase':'allow_rebase_merge'}[params['merge_method']]) is False:raise ValueError()
             return self.safe({'repo':self.repo,'number':params['number'],'base_branch':base,'head_branch':head,
                 'expected_head_sha':params['expected_head_sha'],'merge_method':params['merge_method'],
                 'url':f'https://github.com/{self.repo}/pull/{params["number"]}','title':str(value.get('title',''))})
@@ -283,15 +286,22 @@ class Session:
             if action in {'issue_get','pr_get'}:
                 return self.safe(self.target(params['number'],action.startswith('pr_')))
             response=self.request(request.method,request.path.removeprefix(self.prefix),query=request.query,body=request.body,mutation=request.method!='GET')
-            result=response.data
-            if action.endswith('_list'):
-                if not isinstance(result,list):raise ClientError("Invalid GitHub list response.")
-                for item in result:self.check_repo(item)
-                if action=='issue_list':result=[x for x in result if 'pull_request' not in x]
-                result={'items':result,'page':params['page'],'per_page':params['per_page'],'has_more':response.has_more}
-            elif isinstance(result,dict):
-                try:self.check_repo(result)
-                except ClientError:
-                    if request.method!='GET':raise ClientError('GitHub mutation outcome is uncertain.','uncertain_outcome') from None
-                    raise
-        return self.safe(result)
+            try:
+                result=response.data
+                if action.endswith('_list'):
+                    if not isinstance(result,list):raise ClientError("Invalid GitHub list response.")
+                    for item in result:self.check_repo(item)
+                    if action=='issue_list':result=[x for x in result if 'pull_request' not in x]
+                    result={'items':result,'page':params['page'],'per_page':params['per_page'],'has_more':response.has_more}
+                elif isinstance(result,dict):self.check_repo(result)
+                elif request.method!='GET':raise ValueError()
+                return self.safe(result)
+            except BaseException:
+                if request.method!='GET':raise ClientError('GitHub mutation outcome is uncertain.','uncertain_outcome') from None
+                raise
+        try:
+            return self.safe(result)
+        except BaseException:
+            if action=='branch_create':
+                raise ClientError('GitHub mutation outcome is uncertain.','uncertain_outcome') from None
+            raise

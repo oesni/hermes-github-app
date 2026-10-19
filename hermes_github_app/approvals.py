@@ -21,6 +21,15 @@ class MergeApprovals:
         self._closed=False
         self._pending={}
 
+    def available(self):
+        with self._lock:
+            if self._closed or self.adapter is None or not self.approvers:
+                return False
+        try:
+            return self.adapter.available() is True
+        except Exception:
+            return False
+
     def close(self):
         with self._lock:
             self._closed=True

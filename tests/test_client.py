@@ -223,3 +223,72 @@ def test_all_merge_methods_use_correct_repository_flag(key_file,method,field):
     api=API(key_file,{'':{'full_name':'acme/demo',field:True},'/pulls/1':merge_pr()})
     session=api.client.session('acme/demo',ACTIONS['pr_merge'].permissions)
     assert session.inspect_merge({'number':1,'expected_head_sha':SHA,'merge_method':method})['merge_method']==method
+
+
+@pytest.mark.parametrize('object_value', [None, [], 'invalid', 12])
+def test_malformed_accepted_branch_response_is_uncertain(key_file, object_value):
+    api=API(key_file,{'/git/ref/heads/main':ref('heads','main'),'/git/commits/'+SHA:{'sha':SHA},
+      ('POST','/git/refs'):{'ref':'refs/heads/feature','object':object_value}})
+    with pytest.raises(ClientError) as caught:
+        api.run('branch_create',{'branch':'feature','source_branch':'main','expected_source_sha':SHA})
+    assert caught.value.code=='uncertain_outcome'
+    assert sum(r.method=='POST' and r.url.path.endswith('/git/refs') for r in api.calls)==1
+
+
+def test_expired_mutation_before_send_is_plain_failure(key_file):
+    api=API(key_file)
+    with pytest.raises(ClientError) as caught:
+        api.client._request('POST','/repos/acme/demo/issues','secret-token',body={'title':'title'},mutation=True,deadline=-1)
+    assert caught.value.code=='github_unavailable'
+    assert not api.calls
+
+
+def test_unexpected_post_write_interpretation_failure_is_uncertain(key_file, monkeypatch):
+    api=API(key_file,{('POST','/issues'):{'number':1}})
+    params=validate_params('issue_create',{'title':'title'})
+    session=api.client.session('acme/demo',ACTIONS['issue_create'].permissions)
+    def broken(_):raise RuntimeError('secret-token')
+    monkeypatch.setattr(session,'check_repo',broken)
+    with pytest.raises(ClientError) as caught:
+        session.execute('issue_create',params,build_request('issue_create','acme/demo',params))
+    assert caught.value.code=='uncertain_outcome'
+    assert 'secret-token' not in str(caught.value)
+    assert sum(r.method=='POST' and r.url.path.endswith('/issues') for r in api.calls)==1
+
+
+@pytest.mark.parametrize('method,field',[('merge','allow_merge_commit'),('squash','allow_squash_merge'),('rebase','allow_rebase_merge')])
+@pytest.mark.parametrize('present',[False,True])
+def test_merge_method_omission_delegates_but_explicit_false_refuses(key_file,method,field,present):
+    metadata={'full_name':'acme/demo',**({field:False} if present else {})}
+    api=API(key_file,{'':metadata,'/pulls/1':merge_pr()})
+    session=api.client.session('acme/demo',ACTIONS['pr_merge'].permissions)
+    params={'number':1,'expected_head_sha':SHA,'merge_method':method}
+    if present:
+        with pytest.raises(ClientError):session.inspect_merge(params)
+    else:
+        assert session.inspect_merge(params)['merge_method']==method
+
+
+@pytest.mark.parametrize('action,params',[
+    ('pr_get',{'number':1}),('pr_comment',{'number':1,'body':'hello'}),
+    ('pr_comments_list',{'number':1}),
+])
+def test_issue_number_on_pr_action_is_invalid_without_issue_permission(key_file,action,params):
+    api=API(key_file,{'/pulls/1':httpx.Response(404)})
+    with pytest.raises(ClientError) as caught:api.run(action,params)
+    assert caught.value.code=='invalid_arguments'
+    assert 'issues' not in json.loads(api.calls[0].content)['permissions']
+    assert not any('/issues/' in r.url.path for r in api.calls)
+
+
+def test_branch_post_acceptance_result_interruption_is_uncertain(key_file, monkeypatch):
+    api=API(key_file,{'/git/ref/heads/main':ref('heads','main'),'/git/commits/'+SHA:{'sha':SHA},
+      ('POST','/git/refs'):ref('heads','feature')})
+    params=validate_params('branch_create',{'branch':'feature','source_branch':'main','expected_source_sha':SHA})
+    session=api.client.session('acme/demo',ACTIONS['branch_create'].permissions)
+    def interrupted(_):raise KeyboardInterrupt()
+    monkeypatch.setattr(session,'safe',interrupted)
+    with pytest.raises(ClientError) as caught:
+        session.execute('branch_create',params,build_request('branch_create','acme/demo',params))
+    assert caught.value.code=='uncertain_outcome'
+    assert sum(r.method=='POST' and r.url.path.endswith('/git/refs') for r in api.calls)==1

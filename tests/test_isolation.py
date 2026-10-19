@@ -129,34 +129,64 @@ def test_socket_mount_refused(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(os.environ.get('HERMES_GITHUB_APP_DOCKER_TEST') != '1', reason='opt-in local Docker smoke')
 def test_real_docker_inspect_boundary(tmp_path):
+    import sys
+    import tempfile
     docker = shutil.which('docker')
-    if not docker:
-        pytest.fail('Docker smoke explicitly enabled but docker is unavailable')
-    sandbox = tmp_path / 'sandbox'
-    sandbox.mkdir()
-    protected = tmp_path / 'protected'
-    protected.mkdir()
-    (protected / 'test-key.pem').write_text('TEST-ONLY-NONCREDENTIAL')
-    container = None
+    source = os.environ.get('HERMES_GITHUB_APP_HERMES_SOURCE')
+    assert docker and source, 'Docker smoke needs docker and the supported Hermes source'
+    private_root = Path(__file__).resolve().parents[1] / '.test-private'
+    private_root.mkdir(exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(dir=private_root) as private:
+        config = Path(private) / 'config.yaml'
+        key = Path(private) / 'test-key.pem'
+        for path in (config, key):
+            path.write_text('TEST-ONLY-NONCREDENTIAL')
+            path.chmod(0o600)
+        script = r'''
+import json,os,subprocess,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from tools.environments.docker import DockerEnvironment,_build_security_args
+from tools import terminal_tool
+from tools.environments.base import get_sandbox_dir
+from hermes_github_app.isolation import _guard_isolation,IsolationError
+sandbox=get_sandbox_dir()
+container=None
+try:
+    # Actual supported Hermes flags include the five restored capabilities and
+    # all tmpfs flags. No network requests or credential values are used.
+    command=[sys.argv[2],'run','-d','--rm',*_build_security_args(False),
+             '--mount',f'type=bind,src={sandbox},dst=/workspace',
+             'alpine:3.22','sleep','120']
+    result=subprocess.run(command,check=True,capture_output=True,text=True,timeout=60)
+    container=result.stdout.strip()
+    env=DockerEnvironment.__new__(DockerEnvironment)
+    env._container_id,env._docker_exe=container,sys.argv[2]
+    env._env,env._forward_env,env._init_env_args={},[],[]
+    terminal_tool._active_environments['github-app-smoke']=env
+    _guard_isolation(sys.argv[3],sys.argv[4],task_id='github-app-smoke')
+    hidden=subprocess.run([sys.argv[2],'exec',container,'test','!','-e',sys.argv[4]],capture_output=True,timeout=10)
+    assert hidden.returncode==0
+    # A real registered mount that encloses Hermes settings is refused.
+    os.environ['HERMES_HOME']=str(sandbox)
     try:
-        # No credentials or GitHub calls. Only this returned container ID is removed.
-        result = subprocess.run([
-            docker, 'run', '-d', '--rm', '--network', 'none', '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges', '--mount', f'type=bind,src={sandbox},dst=/workspace',
-            'alpine:3.22', 'sleep', '120',
-        ], check=True, capture_output=True, text=True, timeout=60)
-        container = result.stdout.strip()
-        env = environment()
-        env._container_id, env._docker_exe = container, docker
-        _inspect_container(env, [protected], [sandbox.resolve()])
-        inaccessible = subprocess.run([docker, 'exec', container, 'test', '!', '-e', str(protected / 'test-key.pem')], capture_output=True, timeout=10)
-        assert inaccessible.returncode == 0
-        # The very same real mount is rejected when classified as protected.
-        with pytest.raises(IsolationError):
-            _inspect_container(env, [sandbox], [sandbox.resolve()])
-    finally:
-        if container:
-            subprocess.run([docker, 'rm', '-f', container], check=False, capture_output=True, timeout=20)
+        _guard_isolation(sys.argv[3],sys.argv[4],task_id='github-app-smoke')
+    except IsolationError:
+        pass
+    else:
+        raise AssertionError('Hermes settings mount was accepted')
+    print('Actual Hermes security args and full isolation guard passed')
+finally:
+    terminal_tool._active_environments.pop('github-app-smoke',None)
+    if container:
+        subprocess.run([sys.argv[2],'rm','-f',container],check=False,capture_output=True,timeout=20)
+'''
+        env = {'HOME': os.environ['HOME'], 'PATH': os.environ.get('PATH', ''),
+               'HERMES_HOME': str(tmp_path / 'profile'), 'TERMINAL_ENV': 'docker',
+               'TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES': 'false',
+               'TERMINAL_SANDBOX_DIR': str(tmp_path / 'sandbox')}
+        result = subprocess.run([sys.executable, '-c', script, source, docker, str(config), str(key)], env=env, capture_output=True, text=True, timeout=100)
+        assert result.returncode == 0, result.stderr + result.stdout
 
 
 @pytest.mark.parametrize('source', [None, '', 'relative/sandbox'])
@@ -186,9 +216,11 @@ def guard_runtime(monkeypatch, tmp_path):
     import threading
     from types import ModuleType
     from hermes_github_app import isolation
-    modules = {name: ModuleType(name) for name in ['tools', 'tools.terminal_tool', 'tools.credential_files', 'tools.environments', 'tools.environments.base', 'tools.env_passthrough', 'tools.file_tools', 'tools.process_registry']}
+    modules = {name: ModuleType(name) for name in ['tools', 'tools.terminal_tool', 'tools.credential_files', 'tools.environments', 'tools.environments.base', 'tools.env_passthrough', 'tools.file_tools', 'tools.process_registry', 'hermes_constants']}
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
+    modules['hermes_constants'].get_config_path = lambda: tmp_path / 'hermes-home/config.yaml'
+    modules['hermes_constants'].get_env_path = lambda: tmp_path / 'hermes-home/.env'
     terminal = modules['tools.terminal_tool']
     terminal.__file__ = str(tmp_path / 'hermes-source' / 'tools' / 'terminal_tool.py')
     config = {'env_type': 'docker'}
@@ -284,3 +316,72 @@ def test_guard_refuses_host_process_in_running_or_finished_registry(guard_runtim
         with pytest.raises(IsolationError):
             run_guard(guard_runtime)
         bucket.clear()
+
+
+@pytest.mark.parametrize('caps', [['CAP_DAC_OVERRIDE', 'CAP_CHOWN', 'CAP_FOWNER', 'CAP_SETGID', 'CAP_SETUID'], ['cap_chown', 'dac_override', 'SetUid']])
+def test_docker_capability_prefixes_and_case_normalized(monkeypatch, inspect_data, tmp_path, caps):
+    inspect_data[0]['HostConfig']['CapAdd'] = caps
+    inspect_data[0]['HostConfig']['CapDrop'] = ['cap_all']
+    inspect_with(monkeypatch, inspect_data, tmp_path)
+
+
+@pytest.mark.parametrize('caps', [['CAP_SYS_ADMIN'], ['cap_net_admin'], ['CAP_CAP_CHOWN'], [None], 'CHOWN'])
+def test_docker_capability_normalization_never_grants_unknown(monkeypatch, inspect_data, tmp_path, caps):
+    inspect_data[0]['HostConfig']['CapAdd'] = caps
+    with pytest.raises(IsolationError):
+        inspect_with(monkeypatch, inspect_data, tmp_path)
+
+
+@pytest.mark.parametrize('kind', ['sandbox', 'skills', 'cache'])
+@pytest.mark.parametrize('setting', ['config.yaml', '.env'])
+def test_hermes_settings_cannot_be_exposed_by_any_mount(guard_runtime, kind, setting):
+    settings = guard_runtime.config_path.parent.parent / 'hermes-home' / setting
+    if kind == 'sandbox':
+        guard_runtime.modules['tools.environments.base'].get_sandbox_dir = lambda: str(settings.parent)
+    elif kind == 'skills':
+        guard_runtime.credentials.get_skills_directory_mount = lambda: [{'host_path': str(settings)}]
+    else:
+        guard_runtime.credentials.get_cache_directory_mounts = lambda: [{'host_path': str(settings.parent)}]
+    with pytest.raises(IsolationError):
+        run_guard(guard_runtime)
+
+
+def test_default_hermes_sandbox_subdirectory_remains_supported(guard_runtime):
+    home = guard_runtime.config_path.parent.parent / 'hermes-home'
+    guard_runtime.modules['tools.environments.base'].get_sandbox_dir = lambda: str(home / 'sandboxes')
+    run_guard(guard_runtime)
+
+
+def test_secure_file_diagnostics_keep_path_and_permissions_distinct():
+    import tempfile
+    from hermes_github_app.secure_files import SecureFileError, check_secure_file, read_secure_file
+    root = Path(__file__).resolve().parents[1] / '.test-private'
+    root.mkdir(exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(dir=root) as directory:
+        private = Path(directory)
+        key = private / 'sensitive-name.pem'
+        key.write_text('TEST-ONLY-NONCREDENTIAL')
+        key.chmod(0o600)
+        link = private / 'link.pem'
+        link.symlink_to(key)
+        for path in ['relative-secret-name', str(private / 'missing-secret-name'), str(link), str(private)]:
+            with pytest.raises(SecureFileError) as error:
+                check_secure_file(path)
+            assert error.value.category == 'path'
+            assert 'secret-name' not in str(error.value)
+        key.chmod(0o644)
+        with pytest.raises(SecureFileError) as error:
+            check_secure_file(str(key))
+        assert error.value.category == 'permissions'
+        key.chmod(0o600)
+        private.chmod(0o770)
+        try:
+            with pytest.raises(SecureFileError) as error:
+                check_secure_file(str(key))
+            assert error.value.category == 'permissions'
+        finally:
+            private.chmod(0o700)
+        with pytest.raises(SecureFileError) as error:
+            read_secure_file(str(key), 1)
+        assert error.value.category == 'size'
+        assert 'TEST-ONLY' not in str(error.value)

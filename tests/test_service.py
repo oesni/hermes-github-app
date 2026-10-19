@@ -42,7 +42,7 @@ def test_merge_unavailable_without_host_approval():
 
 def test_merge_rechecks_isolation_policy_and_target():
     target={'repo':'acme/demo','number':1,'base_branch':'main','head_branch':'feature','expected_head_sha':'a'*40,'merge_method':'squash'}
-    adapter=Mock()
+    adapter=Mock();adapter.available.return_value=True
     def present(request_id,target,deadline,callback):callback(request_id,'123',False,True);return True
     adapter.present.side_effect=present
     client=Mock();session=client.session.return_value;session.repo='acme/demo';session.inspect_merge.return_value=target;session.merge.return_value={'merged':True}
@@ -59,3 +59,19 @@ def test_legacy_dotted_action_names_are_not_aliases():
         result=GitHubService(policy(),client).execute(action,'acme/demo',{},recheck_isolation=lambda:None)
         assert result['code']=='invalid_arguments'
     client.session.assert_not_called()
+
+
+def test_merge_without_available_approvers_mints_no_write_token():
+    for approvals in (MergeApprovals(None,[]),MergeApprovals(Mock(available=lambda:False),['123'])):
+        client=Mock()
+        result=GitHubService(policy(),client,approvals).execute('pr_merge','acme/demo',
+            {'number':1,'expected_head_sha':'a'*40,'merge_method':'squash'},
+            context=SimpleNamespace(identity='host-call',cancelled=lambda:False),recheck_isolation=lambda:None)
+        assert result=={'ok':False,'code':'approval_required_unavailable','error':'approval_required_unavailable'}
+        client.session.assert_not_called()
+
+
+def test_unexpected_client_failure_is_not_misclassified_as_isolation():
+    client=Mock();client.session.side_effect=RuntimeError('private data')
+    result=GitHubService(policy(),client).execute('repo_get','acme/demo',{},recheck_isolation=lambda:None)
+    assert result=={'ok':False,'code':'github_unavailable','error':'GitHub operation failed.'}

@@ -49,7 +49,7 @@ Compatibility is verified against Hermes source commit `190e1ffac976ee5fc41c9f18
 The exhaustive supported agent-facing surfaces are:
 
 - Native `terminal` executed by Docker and `process` limited to processes owned by the calling sandbox. Any reachable host process entry refuses operation.
-- Native `read_file`, `write_file`, `patch`, and `search_files` using the same Docker backend.
+- Native `read_file`, `write_file`, `patch`, and `search_files` for Docker filesystem operations. The middleware routes text reads directly through Docker ShellFileOperations, bypassing upstream host extraction/stat/dedup, and refuses notebook/Word/Excel extraction and protected host paths. Other upstream file helpers still resolve paths and may probe metadata for other host paths; this integration does not promise host metadata confidentiality.
 - This plugin's fourteen individual tools listed above.
 
 Interactive CLI roots and live gateway root agents are supported when the host exposes their actual agent/session binding. Unregistered standalone agents, delegated contexts without that binding, `execute_code`, delegation/Orpheus, MCP, tool-search bridges, host hooks, skill management/execution tools, and other native/plugin tools are unsupported. Their presence in the calling agent's enabled tools refuses GitHub calls. This is a deliberate published compatibility boundary, not a claim that arbitrary tools have been audited. Agent shell scripts executed by the supported terminal remain inside Docker.
@@ -58,6 +58,8 @@ Set explicit narrow Hermes toolsets before enabling the plugin:
 
 ```yaml
 toolsets: [terminal, file, github_app]
+tool_search:
+  enabled: false
 plugins:
   disabled: [raft-platform]
 platform_toolsets:
@@ -73,7 +75,7 @@ terminal:
   docker_persist_across_processes: false
 ```
 
-Every configured platform must use only the supported toolsets. Disable the bundled Raft platform hooks and any other host-hook plugins. Multiplexed gateway profiles and desktop `read_terminal` are unsupported. Startup validates known configuration; every call verifies the actual live agent tool set, native handler identities, cancellation/session binding, protected files, task overrides, active containers, and file-tool cached environments. Direct registry calls without the trusted middleware binding are refused. Local and other remote backends, custom mounts/arguments, credential/environment forwarding, task overrides, and cross-process container reuse are refused. Automatic skill/cache mounts must not expose protected paths. Persistent Docker workspaces are supported when safely isolated. Before a first file operation, the middleware initializes the environment through the terminal path so that the supported Hermes revision cannot accidentally reuse a cross-process container.
+Every configured platform must use only the supported toolsets. Disable the bundled Raft platform hooks, gateway directory hooks, and any other host-hook plugins. Tool Search must remain disabled. The middleware restrictions apply process-wide: unsupported tools and unbound cron, ACP, background or delegated contexts are refused, including their terminal/file calls. Multiplexed gateway profiles and desktop `read_terminal` are unsupported. Startup validates known configuration; every call verifies the actual live agent tool set, native handler identities, cancellation/session binding, protected files, task overrides, active containers, and file-tool cached environments. Direct registry calls without the trusted middleware binding are refused. Local and other remote backends, custom mounts/arguments, credential/environment forwarding, task overrides, and cross-process container reuse are refused. Automatic skill/cache mounts must not expose protected paths. Persistent Docker workspaces are supported when safely isolated. Before a first file operation, the middleware initializes the environment through the terminal path and guards every subsequent environment creation to force cross-process reuse off, including file-helper recreation after idle cleanup.
 
 Keep config/key files outside every sandbox/mount. Accepted modes are Hermes-owned `0400`/`0600`, or root-owned `0440`/`0640` readable through a trusted Hermes group. Final files and ancestors cannot be symlinks. Parent directories must be root/Hermes-owned without group/other write access (a conservative subset of trusted-directory layouts). `/tmp` and symlinked paths are unsuitable. Group membership and trusted host/Docker integrity remain administrator responsibilities. The host Python/plugin code must not be writable by the agent. No other credentials or host control services should bypass this boundary.
 

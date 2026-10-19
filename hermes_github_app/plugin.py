@@ -20,14 +20,22 @@ logger = logging.getLogger(__name__)
 
 def register(ctx):
     client = runtime = adapter = approvals = None
+    stage = "config_path"
     try:
         path = os.environ.get('HERMES_GITHUB_APP_CONFIG')
         if not path:
             logger.warning('GitHub App unavailable: configuration path is missing.')
             return
-        config = parse_config(read_secure_file(path, 1024 * 1024))
+        config_bytes = read_secure_file(path, 1024 * 1024)
+        stage = "configuration"
+        config = parse_config(config_bytes)
+        stage = "private_key"
+        from .secure_files import check_secure_file
+        check_secure_file(config.auth.private_key_path)
         runtime = HermesRuntime(ctx, path, config.auth.private_key_path)
+        stage = "isolation"
         runtime.check()
+        stage = "private_key"
         client = GitHubClient(**asdict(config.auth))
         ids = tuple(a.user_id for a in config.merge_approval.approvers)
         adapter = DiscordApprovalAdapter(ids)
@@ -37,8 +45,8 @@ def register(ctx):
         # ConfigError is contractually value-free and safe to show to the admin.
         logger.warning('GitHub App unavailable: %s', exc)
         return
-    except SecureFileError:
-        logger.warning('GitHub App unavailable: protected file ownership, mode, or path check failed.')
+    except SecureFileError as exc:
+        logger.warning("GitHub App unavailable: %s %s check failed.", stage, exc.category)
         return
     except IsolationError:
         logger.warning('GitHub App unavailable: sandbox or tool-surface isolation check failed.')
@@ -46,7 +54,7 @@ def register(ctx):
     except Exception:
         if client is not None:
             client.close()
-        logger.warning('GitHub App unavailable: private key or host compatibility check failed.')
+        logger.warning('GitHub App unavailable: %s validation failed.', stage)
         return
 
     def make_handler(action):
@@ -62,11 +70,11 @@ def register(ctx):
                                          context=call, recheck_isolation=lambda: runtime.check(call))
                 return json.dumps(result, ensure_ascii=False)
             except ActionError:
-                return json.dumps({'ok': False, 'error': 'invalid_arguments'})
+                return json.dumps({'ok': False, 'code': 'invalid_arguments', 'error': 'Invalid tool arguments.'})
             except (IsolationError, SecureFileError):
-                return json.dumps({'ok': False, 'error': 'isolation_refused'})
+                return json.dumps({'ok': False, 'code': 'isolation_refusal', 'error': 'Host isolation could not be established.'})
             except Exception:
-                return json.dumps({'ok': False, 'error': 'github_unavailable'})
+                return json.dumps({'ok': False, 'code': 'github_unavailable', 'error': 'GitHub operation unavailable.'})
         return invoke
 
     def close():
@@ -75,6 +83,7 @@ def register(ctx):
         adapter.close()
         client.close()
 
+    runtime.install_environment_guard()
     for action in ACTIONS:
         handler = make_handler(action)
         runtime.handlers[action] = handler
