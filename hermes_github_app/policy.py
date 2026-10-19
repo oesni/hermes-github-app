@@ -1,7 +1,7 @@
-"""Versioned catalogs with frozen profiles, repository selection and deny-wins exceptions."""
+"""Repository selection, access profiles, repository selection and deny-wins exceptions."""
 from dataclasses import dataclass
 from types import MappingProxyType
-from .actions import ACTIONS_BY_VERSION, READ_ACTIONS, WRITE_ACTIONS, ActionError, canonical_repo
+from .actions import ACTIONS, READ_ACTIONS, WRITE_ACTIONS, ActionError, canonical_repo
 
 
 class PolicyError(ValueError):
@@ -14,8 +14,8 @@ def _object(value, allowed, required=frozenset()):
     return value
 
 
-def _actions(value, version):
-    if not isinstance(value, list) or any(not isinstance(a, str) or a not in ACTIONS_BY_VERSION[version] for a in value):
+def _actions(value):
+    if not isinstance(value, list) or any(not isinstance(a, str) or a not in ACTIONS for a in value):
         raise PolicyError("actions must be a list of known action names")
     if len(set(value)) != len(value):
         raise PolicyError("duplicate action")
@@ -65,12 +65,9 @@ class Policy:
     allow_actions: frozenset
     deny_actions: frozenset
     repository_rules: object
-    version: int = 1
 
     @classmethod
-    def from_dict(cls, config, version=1):
-        if type(version) is not int or version not in ACTIONS_BY_VERSION:
-            raise PolicyError("unsupported policy version")
+    def from_dict(cls, config):
         config = _object(config, {"repositories", "default_access", "allow_actions", "deny_actions", "repository_rules"}, {"repositories", "default_access"})
         repos = _object(config["repositories"], {"mode", "allow", "exclude"}, {"mode", "exclude"})
         mode = repos["mode"]
@@ -92,17 +89,15 @@ class Policy:
             if normalized in rules:
                 raise PolicyError("duplicate normalized repository rule")
             rule = _object(rule, {"access", "allow_actions", "deny_actions"})
-            rules[normalized] = RepositoryRule(_access(rule.get("access", default_access)), _actions(rule.get("allow_actions", []), version), _actions(rule.get("deny_actions", []), version))
-        return cls(mode, allow, exclude, default_access, _actions(config.get("allow_actions", []), version), _actions(config.get("deny_actions", []), version), MappingProxyType(rules), version)
+            rules[normalized] = RepositoryRule(_access(rule.get("access", default_access)), _actions(rule.get("allow_actions", [])), _actions(rule.get("deny_actions", [])))
+        return cls(mode, allow, exclude, default_access, _actions(config.get("allow_actions", [])), _actions(config.get("deny_actions", [])), MappingProxyType(rules))
 
     def authorize(self, repo, action):
         try:
             repo = canonical_repo(repo)
         except ActionError as exc:
             raise PolicyError("invalid repository") from exc
-        if type(self.version) is not int or self.version not in ACTIONS_BY_VERSION:
-            raise PolicyError("unsupported policy version")
-        if not isinstance(action, str) or action not in ACTIONS_BY_VERSION[self.version]:
+        if not isinstance(action, str) or action not in ACTIONS:
             raise PolicyError("unknown action")
         if _matches(repo, self.exclude) or (self.mode == "allowlist" and not _matches(repo, self.allow)):
             raise PolicyError("repository access denied")

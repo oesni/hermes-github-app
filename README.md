@@ -32,19 +32,19 @@ For each selected repository:
   - (global deny_actions + repo deny_actions)
 ```
 
-`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Version 1 retains its fourteen-action catalog. Version 2 adds only `pr_review_comment`, which requires an explicit `allow_actions` entry. Both versions keep the same frozen read and write profile expansions; upgrading or selecting version 2 does not grant inline comments automatically. Version 1 rejects `pr_review_comment` in configuration action lists.
+`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Configuration version 1 recognizes fifteen actions, including the requested `pr_review_comment`, which requires an explicit `allow_actions` entry. The read and write profile expansions remain unchanged; upgrading does not grant inline comments automatically.
 
 | Profile | Actions |
 | --- | --- |
 | read | `repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `pr_list`, `pr_get`, `pr_comments_list` |
 | write | All read actions plus `issue_create`, `issue_comment`, `pr_create`, `pr_comment`, `branch_create` |
-| explicit allowance only | `pr_merge`; version 2 also permits `pr_review_comment` |
+| explicit allowance only | `pr_merge`, `pr_review_comment` |
 
 Each operation is a separate native tool with the same name as its policy action. Arguments are flat: for example, `issue_comment` takes `{repo, number, body}` and `pr_merge` takes `{repo, number, expected_head_sha, merge_method}`. There is no generic action dispatcher or legacy operation alias. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, file write, git push/clone, review submission or diff-reading API, PR edit/delete, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. `contents_read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
 
 ## Inline PR comments
 
-`pr_comment` writes a conversation comment. To comment on a line of a PR diff, opt in to configuration `version: 2` and allow `pr_review_comment` globally or for the selected repository. The read/write profiles do not include this new action. [inline-review.yaml](examples/inline-review.yaml) shows a read baseline with a repository-specific allowance and a global merge denial.
+`pr_comment` writes a conversation comment. To comment on a line of a PR diff, keep configuration `version: 1` and explicitly allow `pr_review_comment` globally or for the selected repository. The read/write profiles do not include this new action. [inline-review.yaml](examples/inline-review.yaml) shows a read baseline with a repository-specific allowance and a global merge denial.
 
 ```json
 {"repo":"acme/demo","number":42,"body":"Could this handle an empty input?","commit_id":"0123456789abcdef0123456789abcdef01234567","path":"src/parser.py","line":27,"side":"RIGHT"}
@@ -56,7 +56,7 @@ The host confirms that the target is an open PR in the selected repository (fork
 
 ## Host boundary
 
-The plugin registers fourteen tools for configuration version 1 and fifteen for version 2 through Hermes's public `register(ctx)` and `ctx.register_tool` API. It does not depend on a Hermes source revision, private agent objects, or a hash of host files. Existing host tools, hooks, delegation, and Docker container reuse stay in place; enable `github_app` alongside them.
+The plugin registers fifteen tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. It does not depend on a Hermes source revision, private agent objects, or a hash of host files. Existing host tools, hooks, delegation, and Docker container reuse stay in place; enable `github_app` alongside them.
 
 ```yaml
 toolsets: [terminal, file, delegation, github_app]
@@ -94,4 +94,4 @@ HERMES_GITHUB_APP_HERMES_SOURCE=/absolute/path/to/hermes-agent python -m pytest 
 
 The native smoke registers the tools through Hermes's public `PluginContext`, then dispatches them through Hermes's normal tool path with a fake GitHub service. It checks that string integers, string booleans, and unknown fields are rejected, and that an existing security hook can still block a call. No live GitHub operations, production secrets, or installed profile changes are used.
 
-The operator-run [`tools/gormes_coexistence_probe.py`](tools/gormes_coexistence_probe.py) requires a prepared, fresh isolated profile. It exercises the installed Gormes hooks and Orpheus adapter with deterministic GitHub HTTP responses and a deterministic child lifecycle, plus real Docker execution and same-process container reuse. It distinguishes refusal by the unchanged host allowlist from an in-memory candidate that adds the current catalog names; it makes no production policy or profile changes. The probe uses version 2 with a read baseline and no new action allowance to check registration of the fifteen-tool catalog; it does not execute inline-comment HTTP requests. Cross-process container reuse is not tested. Set `HERMES_GITHUB_APP_GORMES_RECEIPT` to a saved probe receipt to enable its optional pytest validation, which binds the evidence to hashes of the current product modules and probe source.
+The operator-run [`tools/gormes_coexistence_probe.py`](tools/gormes_coexistence_probe.py) requires a prepared, fresh isolated profile. It exercises the installed Gormes hooks and Orpheus adapter with deterministic GitHub HTTP responses and a deterministic child lifecycle, plus real Docker execution and same-process container reuse. It distinguishes refusal by the unchanged host allowlist from an in-memory candidate that adds the current catalog names; it makes no production policy or profile changes. The probe uses version 1 with a read baseline and no new action allowance to check registration of the fifteen-tool catalog; it does not execute inline-comment HTTP requests. Cross-process container reuse is not tested. Set `HERMES_GITHUB_APP_GORMES_RECEIPT` to a saved probe receipt to enable its optional pytest validation, which binds the evidence to hashes of the current product modules and probe source.

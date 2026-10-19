@@ -1,4 +1,4 @@
-version: 2
+version: 1
 auth:
   app_id: 12345
   installation_id: 67890

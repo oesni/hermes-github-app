@@ -1,4 +1,4 @@
-"""Versioned action catalog and strict, credential-free arguments."""
+"""Action catalog and strict, credential-free arguments."""
 from dataclasses import dataclass
 from types import MappingProxyType
 import re
@@ -42,11 +42,10 @@ ACTIONS = {
     "pr_comments_list": ActionSpec("pull_requests", "read"),
     "pr_create": ActionSpec("pull_requests", "write", (("contents", "read"),)),
     "pr_comment": ActionSpec("pull_requests", "write"),
+    "pr_review_comment": ActionSpec("pull_requests", "write"),
     "branch_create": ActionSpec("contents", "write"),
     "pr_merge": ActionSpec("contents", "write", (("pull_requests", "read"),)),
 }
-ACTIONS_BY_VERSION = MappingProxyType({1: frozenset(ACTIONS), 2: frozenset(ACTIONS) | {"pr_review_comment"}})
-ACTIONS["pr_review_comment"] = ActionSpec("pull_requests", "write")
 READ_ACTIONS = frozenset({"repo_get", "contents_read", "issue_list", "issue_get", "issue_comments_list", "pr_list", "pr_get", "pr_comments_list"})
 WRITE_ACTIONS = READ_ACTIONS | {"issue_create", "issue_comment", "pr_create", "pr_comment", "branch_create"}
 

@@ -105,7 +105,7 @@ def main(args):
     key = state / 'dummy.pem'
     key.write_bytes(key_bytes); key.chmod(0o600)
     config = state / 'github-app.yaml'
-    config.write_text(dump_yaml({'version': 2, 'auth': {'app_id': 12, 'installation_id': 34, 'private_key_path': str(key)},
+    config.write_text(dump_yaml({'version': 1, 'auth': {'app_id': 12, 'installation_id': 34, 'private_key_path': str(key)},
         'policy': {'repositories': {'mode': 'allowlist', 'allow': ['fixture/demo'], 'exclude': []}, 'default_access': 'read'}}))
     config.chmod(0o600)
     os.environ['HERMES_GITHUB_APP_CONFIG'] = str(config)

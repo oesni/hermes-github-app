@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from dataclasses import asdict
-from .actions import ACTIONS, ACTIONS_BY_VERSION, PARAMETER_FIELDS, ActionError, canonical_repo, validate_params
+from .actions import ACTIONS, PARAMETER_FIELDS, ActionError, canonical_repo, validate_params
 from .client import GitHubClient
 from .config import ConfigError, parse_config
 from .isolation import IsolationError
@@ -76,8 +76,6 @@ def register(ctx):
         client.close()
 
     for action in ACTIONS:
-        if action not in ACTIONS_BY_VERSION[config.version]:
-            continue
         handler = make_handler(action)
         schema = tool_schema(action)
         ctx.register_tool(name=action, toolset='github_app', handler=handler,

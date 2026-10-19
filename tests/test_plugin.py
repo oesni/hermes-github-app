@@ -155,7 +155,6 @@ def test_package_does_not_bind_hermes_internals():
 
 @pytest.mark.skipif(not os.getenv('HERMES_GITHUB_APP_HERMES_SOURCE'), reason='opt-in real Hermes dispatch')
 def test_native_plugin_api_dispatch(configuration, tmp_path):
-    configuration.write_text(configuration.read_text().replace('version: 1', 'version: 2'))
     source = os.environ['HERMES_GITHUB_APP_HERMES_SOURCE']
     profile = tmp_path / 'profile'
     profile.mkdir()
@@ -187,9 +186,9 @@ ctx = PluginContext(PluginManifest(name="hermes-github-app"), manager)
 plugin.register(ctx)
 assert registry.get_entry("repo_get") is not None
 assert registry.get_entry("github_app_action") is None
-from hermes_github_app.actions import ACTIONS_BY_VERSION
-assert len(ACTIONS_BY_VERSION[2]) == 15
-assert all(registry.get_entry(name) is not None for name in ACTIONS_BY_VERSION[2])
+from hermes_github_app.actions import ACTIONS
+assert len(ACTIONS) == 15
+assert all(registry.get_entry(name) is not None for name in ACTIONS)
 inline = {"repo": "acme/demo", "number": 1, "body": "Review", "commit_id": "a" * 40,
           "path": "src.py", "line": 8, "side": "RIGHT", "start_line": 4, "start_side": "RIGHT"}
 for field in ("line", "start_line"):
@@ -229,14 +228,14 @@ print("Public registration kept strict arguments and an existing security hook")
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_fourteen_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
-    from hermes_github_app.actions import ACTIONS_BY_VERSION, PARAMETER_FIELDS
+def test_fifteen_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
+    from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
     monkeypatch.setattr(plugin, 'GitHubClient', Mock())
     ctx = Mock()
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
-    assert set(registrations) == set(ACTIONS_BY_VERSION[1])
-    assert len({id(item['handler']) for item in registrations.values()}) == 14
+    assert set(registrations) == set(ACTIONS)
+    assert len({id(item['handler']) for item in registrations.values()}) == 15
     for action, item in registrations.items():
         schema = item['schema']['parameters']
         required, optional = PARAMETER_FIELDS[action]
@@ -277,14 +276,13 @@ def test_startup_diagnostic_categories(configuration, caplog, failure, expected)
     assert 'PRIVATE-SECRET' not in caplog.text
 
 
-def test_v2_registers_inline_tool_with_strict_flat_schema(configuration,monkeypatch):
-    from hermes_github_app.actions import ACTIONS_BY_VERSION
-    configuration.write_text(configuration.read_text().replace('version: 1','version: 2'))
+def test_version_one_registers_inline_tool_with_strict_flat_schema(configuration,monkeypatch):
+    from hermes_github_app.actions import ACTIONS
     monkeypatch.setattr(plugin,'GitHubClient',Mock())
     service=Mock();monkeypatch.setattr(plugin,'GitHubService',Mock(return_value=service))
     ctx=Mock();plugin.register(ctx)
     registered={call.kwargs['name']:call.kwargs for call in ctx.register_tool.call_args_list}
-    assert set(registered)==set(ACTIONS_BY_VERSION[2])
+    assert set(registered)==set(ACTIONS)
     item=registered['pr_review_comment'];schema=item['schema']['parameters']
     assert set(schema['required'])=={'repo','number','body','commit_id','path','line','side'}
     for name in ('line','start_line'):

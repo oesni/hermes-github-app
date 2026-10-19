@@ -104,11 +104,11 @@ def test_merge_explicit_policy_deny_never_authenticates():
     assert result['code']=='policy_denied';client.session.assert_not_called()
 
 
-def test_inline_version_one_and_ungranted_v2_refuse_before_auth():
+def test_inline_profiles_without_explicit_allow_refuse_before_auth():
     from hermes_github_app.policy import Policy
     params={'number':1,'body':'Comment','commit_id':'a'*40,'path':'src/main.py','line':2,'side':'RIGHT'}
-    for version in (1,2):
-        p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':'write'},version=version)
+    for access in ('read','write'):
+        p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':access})
         client=Mock()
         result=GitHubService(p,client).execute('pr_review_comment','acme/demo',params,recheck_isolation=lambda:None)
         assert result['code']=='policy_denied'
@@ -117,7 +117,7 @@ def test_inline_version_one_and_ungranted_v2_refuse_before_auth():
 
 def test_inline_malicious_args_never_reach_auth():
     from hermes_github_app.policy import Policy
-    p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':'read','allow_actions':['pr_review_comment']},version=2)
+    p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':'read','allow_actions':['pr_review_comment']})
     valid={'number':1,'body':'Comment','commit_id':'a'*40,'path':'src/main.py','line':2,'side':'RIGHT'}
     invalid=[{'line':'2'},{'line':True},{'line':0},{'number':False},{'body':'  '},
         {'path':'../secret'},{'path':'/etc/passwd'},{'path':'a\\b'},{'side':'right'},
