@@ -1,0 +1,178 @@
+# GitHub App configuration interface v1
+
+## Summary
+
+Hermes administrators configure a GitHub App through a readable YAML file that determines which repositories and actions an agent may access, including repository-specific permissions. Credentials remain outside the agent's sandbox, while authorized GitHub operations are available through native structured tools. The user authorized implementation of the requested repository/action policy scope, tests, independent Claude review, and a pull request, and explicitly requested removal of the unsolicited Discord approval adapter and its coupled configuration. This version-1 contract supersedes the exploratory README's JSON interface and earlier draft action-list schema; writing or reviewing this document does not install, enable, or deploy the plugin.
+
+## Behavior
+
+1. **Scope.** Version 1 configures one GitHub App installation per file and one configuration snapshot per plugin instance. It supports GitHub.com and the fourteen actions in invariant 12. Multiple-installation selection, GitHub Enterprise endpoints, arbitrary REST/GraphQL requests, shell `gh` access, `git clone`, and `git push` are outside this interface. `repo_get` is a proposed metadata-read convenience, not an additional previously confirmed user requirement.
+
+2. **Administrator-selected file.** The administrator supplies an absolute host filesystem path through `HERMES_GITHUB_APP_CONFIG`. This variable contains only a path. Missing, empty, relative, inaccessible, or invalid paths prevent plugin activation; no example file, working-directory file, previously cached configuration, or permissive policy is selected automatically. Agents cannot select or override the configuration path through tool arguments.
+
+3. **Document format.** The file is a single UTF-8 YAML 1.2 document containing a mapping. Its top-level fields are required `version`, `auth`, and `policy`. `version` must be the integer `1`. Unsupported versions are rejected. YAML is chosen for readable administrator-maintained configuration; this does not require compatibility with the exploratory JSON implementation.
+
+4. **Strict parsing.** Unknown keys at any level, duplicate mapping keys at any level, aliases, anchors, merge keys, explicit YAML tags, and multiple YAML documents are rejected. Every mapping key must be a scalar string; complex keys and non-string keys are invalid. Values are never silently coerced between strings, integers, booleans, nulls, lists, or mappings. Null is invalid for every field. Booleans are not integers. Comments and quoted strings are permitted; quoted numeric values do not satisfy integer fields. Positive integer fields accept plain base-10 digits without signs, separators, leading zeroes, or alternate numeric bases. Empty documents and non-mapping roots are invalid.
+
+5. **Fields and defaults.** Required fields are identified below. Optional action lists default to `[]`, optional `repository_rules` defaults to `{}`; there are no implicit repository, authentication, version, or default-access choices. Omitted optional fields and their explicit empty defaults are equivalent. Unknown keys, including the obsolete draft keys `default_actions` and `denied_actions`, are rejected; this unshipped proposal does not define a runtime migration from earlier drafts.
+
+   | Field | Required? | Type, allowed value, and default |
+   | --- | --- | --- |
+   | `version` | Yes | Integer `1` |
+   | `auth` | Yes | Mapping containing exactly the next three fields |
+   | `auth.app_id` | Yes | Integer `1` through `9223372036854775807` (`2^63 - 1`) |
+   | `auth.installation_id` | Yes | Integer `1` through `9223372036854775807` |
+   | `auth.private_key_path` | Yes | Nonempty absolute host-file path string |
+   | `policy` | Yes | Mapping with the fields below |
+   | `policy.repositories` | Yes | Mapping with required `mode`, `exclude`, and optional `allow` |
+   | `policy.repositories.mode` | Yes | Exact string `allowlist` or `all` |
+   | `policy.repositories.allow` | No | Repository selector list; default `[]` |
+   | `policy.repositories.exclude` | Yes | Repository selector list; may be empty |
+   | `policy.default_access` | Yes | Exact string `read` or `write` |
+   | `policy.allow_actions` | No | Exact action-name list; default `[]` |
+   | `policy.deny_actions` | No | Exact action-name list; default `[]` |
+   | `policy.repository_rules` | No | Mapping from exact repository names to rule mappings; default `{}` |
+   | `policy.repository_rules.<repo>.access` | No | Exact `read` or `write`; inherits `default_access` |
+   | `policy.repository_rules.<repo>.allow_actions` | No | Exact action-name list; default `[]` |
+   | `policy.repository_rules.<repo>.deny_actions` | No | Exact action-name list; default `[]` |
+
+
+   A rule mapping may contain only `access`, `allow_actions`, and `deny_actions`. A rule value of `{}` inherits the global baseline and exceptions; it does not deny access. A list, string, or null in place of a rule mapping is invalid.
+
+6. **Literal paths and secrets.** `private_key_path` is interpreted literally: no tilde expansion, environment-variable interpolation, command substitution, includes, or URL loading occurs. Paths containing null characters are invalid. A private key, client secret, JWT, installation token, personal access token, or other credential value cannot be supplied in this configuration or in tool arguments. There is no token/password/private-key-content field. An unreadable or invalid private key prevents activation without showing its contents.
+
+7. **Host ownership.** Configuration and key files must be regular files under one of these layouts: (a) owned by the trusted Hermes OS account with mode exactly `0400` or `0600`; or (b) owned by root (UID 0), group-owned by a group to which the Hermes OS account belongs, with mode exactly `0440` or `0640`, and readable by Hermes through that group. In layout (b), only trusted Hermes service accounts and administrators may belong to the reader group; group write and all other-user permissions are forbidden. No separate owner/group designation setting exists; these ownership rules are exhaustive. Every containing directory must be controlled by trusted administrators or the trusted Hermes account and must not be writable by untrusted users or any agent-reachable surface. Symlinks in the final file or any ancestor path component are rejected. The plugin and host runtime also require protection from agent writes. Layout (a) trusts the host process itself; it does not claim to protect policy from an adversarial Hermes OS account. An agent-accessible host write path that could change permissions or replace these files violates the isolation prerequisite and requires refusal under invariants 15–16. The agent must not receive the configuration or key through files, mounts, environment forwarding, exposed logs, or tool results.
+
+8. **Repository identity.** Exact repository names have the form `owner/repo`, with no URL, whitespace, query, fragment, trailing slash, backslash, or `.git` suffix stripping. Owner names contain 1–39 ASCII letters, digits, or hyphens, start and end with a letter or digit, and repository names contain 1–100 ASCII letters, digits, underscores, periods, or hyphens; repository names `.` and `..` are invalid. Enterprise Managed User owner names containing underscores are unsupported in version 1. Names are compared case-insensitively by their lowercase form. A literal name ending in `.git` remains that literal name. Tool calls require exact names rather than selectors. Both the requested repository and GitHub's actually resolved canonical target must satisfy policy and be equal after this normalization; a different or unverifiable target is refused. Every HTTP redirect is refused rather than followed, including repository renames/transfers and transferred issue redirects. No mutation may be sent to a redirected or differently resolved target. The repository canonical name must first be confirmed against GitHub. An operation response that does not repeat the repository identity is accepted when it comes from the requested operation path under that confirmed repository without a redirect; an identity explicitly conflicting with the confirmed repository is refused.
+
+9. **Repository selectors.** `allow` and `exclude` accept exact repository names and `owner/*`, where the owner follows invariant 8. `owner/*` selects every repository under that exact owner. No other wildcard syntax is accepted: `*`, `*/*`, `owner/repo-*`, regular expressions, and negated patterns are invalid. `repository_rules` accepts exact repository names only. Duplicate selectors within each list and duplicate repository-rule keys are rejected after case normalization: `Acme/*` and `acme/*` are duplicates, as are `Acme/Demo` and `acme/demo`. Overlap between distinct selectors is valid; order does not change the outcome. A rule for a repository outside the selection or inside an exclusion is valid but inert; it does not create an exception or make the configuration invalid.
+
+10. **Repository selection.** In `allowlist` mode, an empty `allow` list denies every repository; otherwise a repository must match at least one allow selector. In `all` mode, `allow` may be omitted or `[]`; a nonempty list is an error, and all repositories are initially eligible. In both modes, an `exclude` match denies the repository regardless of allow matches, repository rules, or action permissions. `all` never enlarges the GitHub App installation's access.
+
+11. **Profiles and action precedence.** Repository selection and exclusions are applied first. For an eligible repository, let `baseline` be the version-1 profile chosen by its exact rule's `access`, or `default_access` if absent. Its effective actions are `(baseline UNION policy.allow_actions UNION repo.allow_actions) MINUS (policy.deny_actions UNION repo.deny_actions)`. Global and local denials both win over every grant, including profile grants; a local allow cannot undo a global deny. An exact rule changes only the baseline when it supplies `access`; it does not replace global allowances or denials. Explicit `access: read` is a baseline, not a ceiling: global or local allowances may still add writes. Use local denials to subtract inherited exceptions. Empty action arrays add/remove nothing, and a missing rule behaves like `{}`. To disable a repository entirely, exclude it; no `none` profile exists. Rules cannot override repository exclusions or admit unselected repositories. Action names are case-sensitive; unknown names, duplicates within a list, wildcard actions, and `read`/`write` used as action names are invalid. A name appearing in both allow and deny lists is valid and denied.
+
+   The `read` profile contains exactly eight actions: `repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `pr_list`, `pr_get`, and `pr_comments_list`. The `write` profile contains those eight plus `issue_create`, `issue_comment`, `pr_create`, `pr_comment`, and `branch_create`. **Neither profile contains `pr_merge`**; merge requires an explicit action allowance and the GitHub prerequisites in invariant 13. These sets are frozen for version 1. Profiles refer only to this exhaustive catalog, not all operations GitHub calls read/write: `contents_write`, issue/PR edits, and deletion remain unsupported and invalid. Any later expansion of a profile or catalog requires a new configuration version and explicit administrator opt-in; upgrading the plugin must not enlarge version-1 grants.
+
+12. **Closed action catalog.** The following action names are exhaustive. Each name is also the native tool name, with no `github_` prefix; tool arguments contain `repo` plus the operation-specific fields directly. Configuration action lists use these same snake_case names. Legacy dotted action names and the generic `github_app_action` tool are unsupported and rejected. The profiles expand only as defined in invariant 11; explicit action allowances grant only their named operation. Each action is independently grantable; the GitHub permissions below are additional prerequisites, not substitutes for the configured action policy.
+
+   | Action | Observable operation | GitHub repository permission prerequisite |
+   | --- | --- | --- |
+   | `repo_get` | Read metadata of the named repository | metadata:read |
+   | `contents_read` | Read one file or list one directory at the default branch or an existing branch/tag in the named repository | contents:read |
+   | `issue_list` | List issue metadata and bodies, excluding pull requests and comment threads | issues:read |
+   | `issue_get` | Read one issue's metadata and body by number, excluding its comment thread | issues:read |
+   | `issue_comments_list` | Read one issue's conversation comments | issues:read |
+   | `issue_create` | Create an issue | issues:write |
+   | `issue_comment` | Add a comment to an issue | issues:write |
+   | `pr_list` | List pull request metadata and bodies, excluding comments, reviews, commits, files, and diffs | pull_requests:read |
+   | `pr_get` | Read one pull request's metadata and body by number with the same exclusions | pull_requests:read |
+   | `pr_comments_list` | Read one pull request's conversation comments, excluding review comments | pull_requests:read |
+   | `pr_create` | Create a pull request between existing branches | pull_requests:write |
+   | `pr_comment` | Add a conversation comment to a pull request | pull_requests:write |
+   | `branch_create` | Create a new branch at a verified commit in the selected repository | contents:write; [GitHub create-reference contract](https://docs.github.com/en/rest/git/refs#create-a-reference) |
+   | `pr_merge` | Merge one policy-authorized PR at its expected head | contents:write for merge; pull_requests:read for prerequisite checks; [GitHub merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request) |
+
+13. **Issue and PR separation and arguments.** The `issue_get`, `issue_comment`, and `issue_comments_list` actions reject PR numbers; their `pulls` counterparts reject issue numbers, including where GitHub uses shared API routes. PR conversation comments do not include review submissions or line-specific review comments. PR changed-file/diff/commit/review reading and writing are outside version 1. The four issue/PR create/comment mutations accept only these parameters: `issue_create` requires `title` and permits `body`; `issue_comment` and `pr_comment` require `number` and `body`; `pr_create` requires `title`, `head`, and `base` and permits `body` and `draft`. Titles are nonblank strings of 1–256 Unicode code points with no control characters. Bodies are strings of at most 65536 Unicode code points; NUL is forbidden, line breaks and tabs are permitted. A create body's default is the empty string; comment bodies must contain a non-whitespace character. Numbers are integers from `1` through `2147483647`; booleans are invalid. `draft` is a boolean defaulting to `false`. Unknown fields are refused, including labels, assignees, milestones, issue-to-PR conversion, and `maintainer_can_modify`. `head` and `base` must name existing branches in the same selected repository: no fork-qualified `owner:branch`, URLs, raw commit IDs, or implicit branch creation. They must be valid short Git branch names and at most 255 UTF-8 bytes; `HEAD` and names starting with `refs/` are refused; all-hex strings of 40 or 64 characters are refused as commit-ID-shaped values even if a branch happens to have that name. The agent must use branches that already exist; this plugin does not provide a way to push them. Only `pr_merge` grants merge capability; no action grants closure, deletion, or other edits. An allowed mutation, including a branch creation or merge, may trigger repository workflows or bots; these downstream effects are outside the direct-action policy.
+
+   Read parameters are also closed: `repo_get` takes no parameters; `contents_read` requires a repository-relative `path` (empty for the root directory) and permits `ref`; `issue_list` and `pr_list` permit `state`, `page`, and `per_page`; `issue_get` and `pr_get` require `number`; the two `comments.list` actions require `number` and permit `page` and `per_page`. `state` is `open`, `closed`, or `all` and defaults to `open`; `page` is an integer from 1–10000 defaulting to 1; `per_page` is an integer from 1–100 defaulting to 30. Each call returns one upstream GitHub page without implicitly following pagination URLs. List results include `page`, `per_page`, and a boolean `has_more` reflecting whether another upstream page exists; upstream pagination metadata is not followed as an arbitrary URL. For `issue_list`, page boundaries and page size count upstream items before PR filtering, so a returned page can contain fewer items or be empty while `has_more` is true. `path` must not contain a leading slash, backslash, `.` or `..` segments, NUL, or control characters. `ref`, when supplied, is an existing branch or tag name of that repository (at most 255 UTF-8 bytes), never a raw SHA or other revision expression; 40/64-character all-hex values are refused. Ambiguous names shared by a branch and tag are refused. An omitted `ref` selects the repository's default branch. Missing branches/tags are errors, not fallback requests. A regular-file result contains metadata and base64-encoded bytes, including for binary files, with a maximum decoded content size of 1 MiB (1048576 bytes). Larger files return an explicit size-limit error without a partial success or downloading a returned URL. Directory results list immediate entries only. Symlinks and submodules return metadata only; their targets are never traversed by this action.
+
+
+   **Branch creation.** `branch_create` requires `branch` and exactly one source form: (a) `source_branch` plus required `expected_source_sha`, or (b) `source_commit_sha` without either field from (a). No other parameters are allowed. Branch names follow the branch-name rules above. Commit IDs are full 40- or 64-character hexadecimal IDs matching the repository's object format, normalized to lowercase; abbreviations and revision expressions are refused. Every source is verified in the same selected repository. In (a), the observed source branch head must equal `expected_source_sha`; the new branch points to that exact commit even if the source branch moves after verification. In (b), the source commit must be verifiably reachable from an existing branch or tag in that repository; merely finding a fork-network object through GitHub is insufficient. An empty repository without a verifiable source is refused. An existing target branch always causes refusal, even when it points to the requested commit; an existing tag with the proposed branch name also causes refusal. GitHub evaluates applicable creation rules, including rules for a target branch that does not yet exist, under the deployment prerequisite below. There is no overwrite, force update, new commit upload, or cross-repository source. Success reports the new branch and actual commit ID; an uncertain result is not retried automatically.
+
+   **Merge parameters and protections.** `pr_merge` requires exactly `number`, `expected_head_sha`, and `merge_method`. The number follows the integer rule above; the SHA follows the full-ID rule above; the method is exactly `merge`, `squash`, or `rebase` with no default. The target must be an open, non-draft, unmerged PR in the selected repository, and its current head must equal the expected head. This merge interface permits only a same-repository head; fork-head PRs are refused. GitHub branch protections, required reviews/checks, and repository-enabled merge methods remain mandatory. GitHub evaluates applicable protections under the deployment prerequisite below. The GitHub merge request must condition execution on `expected_head_sha`, so a head change after host checks cannot merge a different head. No bypass, force, auto-merge, queue enrollment, branch deletion, custom commit text, or broad merge instruction is supported. If GitHub rejects the merge or the head changes, the call fails; it does not switch method or target. Success reports GitHub's actual merge result and resulting commit ID. An ambiguous timeout/interruption is reported as uncertain without an automatic retry or success claim.
+
+   **Protection responsibility for branch creation and merge.** As a deliberate product design choice, version 1 delegates classic branch-protection and ruleset applicability, required checks/reviews, and permitted merge methods to GitHub's enforcement. It does not independently reconstruct classic wildcard rules, inventory repository/inherited organization rulesets, or verify effective bypass actors/admin roles. Ordinary unprotected repositories and branches may proceed when policy permits and GitHub accepts the request. A trusted administrator must configure and maintain the App/installation without applicable bypass grants or exemptions for these actions. This is an external deployment prerequisite, not a condition the plugin verifies; if the administrator violates it, the plugin cannot guarantee branch protection will be enforced. This replaces the earlier draft's automated bypass-verification promise rather than claiming that verification is complete.
+
+   The plugin requests no repository/organization administration permissions for protection inspection and exposes no protection-setting mutations. The agent cannot configure bypass, force an update, switch identities, enable auto-merge, or enter a merge queue through this interface. A GitHub rejection causes failure without retry, privilege elevation, method switching, or bypass fallback. This allocation of responsibility does not weaken the plugin's own repository/action policy, credential isolation, source/head checks.
+
+   **Merge dispatch and rechecks.** A policy-authorized `pr_merge` call verifies the selected repository and PR prerequisites, then rechecks isolation, policy, base branch, head branch, expected head SHA, and merge method immediately before one dispatch. A changed target returns a target-changed refusal. There is no separate approval adapter, approver list, confirmation prompt, or pending-approval lifecycle.
+
+   GitHub atomically enforces the expected head SHA, but its merge API provides no atomic base-branch precondition. The host recheck detects retargeting before dispatch; an unavoidable race remains if the PR is retargeted between that check and GitHub accepting the merge. After dispatch, cancellation cannot undo an accepted merge: inability to determine the result returns a distinct uncertain-outcome result, never a no-side-effects claim. No uncertain operation is automatically retried.
+
+14. **Installation ceiling.** Effective access is the intersection of configured repository selection, configured action permissions, the chosen installation's repository access, and GitHub App permissions. A policy grant cannot bypass a missing installation permission or repository grant. Additional GitHub prerequisites, such as workflow-related permissions for a particular branch operation, can cause refusal; the plugin never elevates permissions automatically to satisfy them. Each operation uses an installation token restricted to the configured installation, the one confirmed target repository, and only the GitHub permissions required by that operation and its prerequisite reads (including unavoidable metadata access). It does not reuse a broader token to bypass an unavailable restriction. Tokens remain host-owned and cannot be exported to the agent or sandbox; authorized operation results are returned instead. There is no fallback to a personal token, another installation, ambient `gh` credentials, anonymous writes, or a broader identity when the chosen installation cannot perform an operation.
+
+15. **Sandbox availability and calling context.** Docker is the only supported backend in version 1; every other backend, including known SSH, Modal, and Singularity backends, is refused. Every agent-reachable execution or filesystem surface must preserve the protected-host boundary, including terminal/file/code-execution tools, MCP tools, plugins, host-run skill scripts or hooks, and delegated children with different toolsets or backend overrides. This requirement does not ban trusted host-native tools such as this policy-bound tool: their supported contracts must prevent arbitrary host execution, protected-file reads/writes, and credential export. A host-native surface without an established supported isolation contract makes the context unsupported. Each released version must publish the exhaustive supported host-native surface list and relevant compatibility limits; unlisted surfaces are unsupported. Startup checks the known configured surfaces and sandbox prerequisites before activation. Every GitHub call rechecks the actual calling context, including its enabled surfaces, per-task overrides, delegated context, and active sandbox state. A local backend, an unknown backend, changed unsafe context, or inability to establish those facts refuses the call. A sandboxed parent does not authorize a local-backend child. Ordinary supported sandbox workspace operations remain usable without receiving GitHub credentials or running a GitHub CLI.
+
+16. **Isolation checks and administrator responsibility.** Startup and per-call checks must establish that configured and active Docker privileges, network modes (including refusal of host networking or another mode that defeats the protected-host boundary), extra arguments, bind mounts (including automatic credential/skill/cache mounts), environment forwarding, and context overrides cannot expose the configuration, private key, host code, or host execution capabilities to the agent. They must also establish that agent-writable locations cannot replace protected files through writable parent directories. Each call rechecks the configured configuration/key paths for presence, regular-file status, accepted ownership and modes, absence of final/ancestor symlinks, and protected parent directories. A missing file or failed check is an isolation refusal even when a policy/key snapshot is already loaded. Known unsafe or unverifiable settings are refused, not merely warned about. The plugin does not claim to audit arbitrary third-party tool internals: only surfaces with supported, verifiable isolation contracts can participate; otherwise the calling context is refused. Administrators are responsible for the integrity of trusted host software, reader-group membership, Docker infrastructure, the GitHub no-bypass deployment prerequisite in invariant 13, and the absence of independent credentials or sandbox-reachable host-local/external control services that bypass this boundary, such as a host Hermes control API. The plugin must not silently copy keys, switch to local execution, or broaden access. Repository exclusions authorize targets by name; they do not guarantee object provenance or content confidentiality. Even branch/tag-limited reads and allowed PR metadata can expose content or references originating in forks, mirrors, or excluded repositories when GitHub serves them through the allowed target. These rules do not block anonymous public network reads or revoke independent credentials.
+
+17. **Startup state.** On startup, the plugin validates the entire file and host-side prerequisites as one configuration, and loads both policy and private-key material into that instance's snapshot. It becomes available only after all checks succeed. A single invalid field, invalid key, or failed isolation prerequisite leaves Hermes running but omits this plugin's GitHub tools from the agent's available tools; valid portions are not partially activated. A later per-call isolation failure returns an isolation-refusal result and performs no GitHub operation. Local validation cannot prove future GitHub availability, installation access, or permission grants, so activation is not a claim that a live GitHub operation will succeed.
+
+18. **Snapshot and restart.** Configuration and private-key material are an atomic startup snapshot: each operation uses one complete loaded version, not a mixture of revisions. The files are not reread for new policy/key contents on each request. Editing or replacing file contents does not hot-reload or replace the loaded snapshot. Removing a required file or violating its mandatory per-call ownership, mode, symlink, or parent checks causes isolation refusal. Restoring valid files can clear that refusal but does not change the loaded policy or key; restart is still required to apply their new contents. Administrators restart the relevant Hermes instance to apply policy or credential changes. A new instance with invalid files fails closed and does not adopt a previous snapshot. An old instance retains its old policy and key until stopped; replacing files alone does not revoke its grants or erase its loaded key.
+
+19. **In-flight work and concurrent instances.** Restart or policy revocation does not guarantee cancellation of an operation already authorized under the old snapshot, and a GitHub mutation already accepted may complete. After the old instance stops accepting new work, the replacement accepts new operations only after successfully loading its own complete snapshot. Concurrent instances have independent snapshots; there is no implied cross-instance reload or global revocation. Administrators requiring revocation must stop all relevant old instances and, when necessary, revoke access at GitHub. A timeout or interrupted mutation is reported as uncertain rather than claimed to have failed without side effects; the plugin does not automatically repeat such a mutation.
+
+20. **Diagnostics.** Startup failures tell the administrator whether the problem is the configuration path, YAML syntax, field/type/unknown action, host file permissions, private key, or sandbox isolation. Field names and line/column locations may be shown; rejected values, key contents, tokens, authorization headers, and raw credential-bearing responses must not be echoed. Agent-facing results distinguish policy denial, invalid arguments, isolation refusal, GitHub denial/unavailability, uncertain mutation outcome, and target-changed refusal without disclosing authentication material. Denial does not trigger a broader retry automatically.
+
+21. **Allowlist example.** This complete draft allows `acme/*` except payroll, gives the `read` baseline globally with issue comments allowed, upgrades support to `write`, and globally denies merges. Archive explicitly uses `read` and removes the inherited issue-comment exception. Support's explicit merge allowance is still defeated by the global denial. IDs and paths must be replaced before use.
+
+    ```yaml
+    version: 1
+    auth:
+      app_id: 12345
+      installation_id: 67890
+      private_key_path: /srv/hermes-private/github-app.pem
+    policy:
+      repositories:
+        mode: allowlist
+        allow: [acme/*]
+        exclude: [acme/payroll]
+      default_access: read
+      allow_actions: [issue_comment]
+      deny_actions: [pr_merge]
+      repository_rules:
+        acme/support:
+          access: write
+          allow_actions: [pr_merge]
+        acme/archive:
+          access: read
+          deny_actions: [issue_comment]
+        acme/inherits: {}
+    ```
+
+22. **All-except example.** This complete draft uses the `write` baseline for installation-accessible repositories except payroll, the excluded owner, and a frozen repository. Merge is globally denied. Archive selects the `read` baseline, while support inherits `write` but denies branch creation locally. Empty global allowances and an empty local rule add no permissions beyond the inherited baseline.
+
+    ```yaml
+    version: 1
+    auth:
+      app_id: 12345
+      installation_id: 67890
+      private_key_path: /srv/hermes-private/github-app.pem
+    policy:
+      repositories:
+        mode: all
+        exclude: [acme/payroll, secret-org/*, acme/frozen]
+      default_access: write
+      allow_actions: []
+      deny_actions: [pr_merge]
+      repository_rules:
+        acme/archive:
+          access: read
+        acme/support:
+          deny_actions: [branch_create]
+        acme/inherits: {}
+    ```
+
+23. **Decision examples.** “Allow” means policy permits the action; GitHub access, isolation, operation prerequisites still apply. These examples demonstrate set union followed by denial, not replacement of global exceptions.
+
+    | Configuration | Repository / action | Policy outcome and reason |
+    | --- | --- | --- |
+    | Allowlist example | `Acme/Website` / `contents_read` | Allow: read profile and selected owner |
+    | Allowlist example | `other/demo` / `repo_get` | Deny: outside selection |
+    | Allowlist example | `acme/payroll` / `issue_comment` | Deny: exclusion wins over global allowance |
+    | Allowlist example | `acme/website` / `issue_comment` | Allow: read baseline plus global exception |
+    | Allowlist example | `acme/website` / `issue_create` | Deny: not in read baseline or allowances |
+    | Allowlist example | `ACME/SUPPORT` / `branch_create` | Allow: exact rule chooses write baseline |
+    | Allowlist example | `acme/support` / `pr_merge` | Deny: global deny beats local explicit allow |
+    | Allowlist example | `acme/archive` / `issue_comment` | Deny: local deny removes inherited global allowance |
+    | Allowlist example | `acme/inherits` / `issue_comment` | Allow: empty rule inherits global exception |
+    | All-except example | `other/demo` / `issue_create` | Allow if installation permits: write baseline |
+    | All-except example | `acme/archive` / `issue_create` | Deny: local read baseline with no write exception |
+    | All-except example | `acme/support` / `branch_create` | Deny: local deny subtracts from write baseline |
+    | All-except example | `acme/frozen` / `repo_get` | Deny: excluded repository |
+    | All-except example | `secret-org/demo` / `issue_get` | Deny: excluded owner |
+    | Either example | `acme/support` / `issue_comment` on a PR | Invalid-arguments refusal after policy evaluation: issue/PR distinction |
+    | Read baseline, no global deny, local `allow_actions: [pr_merge]` | That selected repository / `pr_merge` | Policy permits; merge proceeds only when target/head checks and GitHub prerequisites pass |
+
+
+
+24. **Review status.** The user authorized the requested read/write profiles, global and per-repository action exceptions, branch creation, merge capability, implementation, tests, independent Claude review, and a pull request. The user's later instruction explicitly removes the unsolicited Discord adapter and coupled approval workflow. Prior invented approval requirements were not user-requested product scope. Installation, deployment, and any actual PR merge remain unauthorized; this document and its review do not authorize those operations.
