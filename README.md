@@ -52,7 +52,9 @@ toolsets: [terminal, file, delegation, github_app]
 
 Add `github_app` to the toolsets the host already uses. The plugin does not read that list and does not require other entries to be removed. A host that gives a child agent only part of the parent's toolsets, including Gormes Orpheus, needs `github_app` on the parent route before the child can call these tools.
 
-Every call rechecks the configuration and private-key files. The plugin keeps JWTs and installation tokens in the host process and returns only the authorized GitHub result. It does not add mounts, forward environment variables, or change Docker reuse. Administrators keep the config and key outside agent-reachable workspaces and mounts. A local terminal backend, a mounted Docker socket, a host volume that contains these files, or another process running as the Hermes account can read a Hermes-owned `0600` key. The plugin does not detect those setups.
+Gormes also has an existing host security allowlist. Its current policy does not include these fourteen tool names, so registration alone does not permit their use. Before enabling them, explicitly add the exact names in the table above to that allowlist, preserving its existing entries and checks. Keep the security hook enabled; the plugin's repository/action policy continues to apply to every permitted call.
+
+Every call rechecks the configuration and private-key files. The plugin enforces repository and action policy through its own tools, keeps App credentials and tokens in the host process, and returns only authorized GitHub results. Its interface provides no credential export or arbitrary host-file access. It does not add mounts, forward environment variables, or change Docker reuse. Administrators keep the config and key outside agent-reachable workspaces and mounts. A local terminal backend, a mounted Docker socket, a host volume that contains these files, or another process running as the Hermes account can read a Hermes-owned `0600` key. The plugin does not detect those setups.
 
 Accepted modes are Hermes-owned `0400`/`0600`, or root-owned `0440`/`0640` readable through a trusted Hermes group. Final files and ancestors cannot be symlinks. Parent directories must be root/Hermes-owned without group/other write access. `/tmp` and symlinked paths are unsuitable. Group membership and the decision not to mount these files remain administrator responsibilities.
 
@@ -60,7 +62,7 @@ Accepted modes are Hermes-owned `0400`/`0600`, or root-owned `0440`/`0640` reada
 
 Both bundled examples deny `pr_merge` globally. To enable it for selected repositories, configure an explicit allowance without a conflicting global or repository denial. Merge uses the same host-enforced policy as other actions; there is no separate approval adapter or platform-specific configuration.
 
-A merge requires the PR number, expected head SHA, and explicit merge method. The host verifies the target and immediately rechecks isolation, policy, base/head branches, and head SHA before one dispatch. GitHub atomically checks the head SHA; its API cannot atomically bind the base branch, so retargeting after the final check remains possible. An uncertain mutation is never automatically retried.
+A merge requires the PR number, expected head SHA, and explicit merge method. The host verifies the target and immediately rechecks protected-file metadata, policy, base/head branches, and head SHA before one dispatch. GitHub atomically checks the head SHA; its API cannot atomically bind the base branch, so retargeting after the final check remains possible. An uncertain mutation is never automatically retried.
 
 GitHub enforces repository protections. **Administrators must keep the App free of applicable bypass grants.** The plugin does not independently audit protection/ruleset bypass status and cannot guarantee protection if that prerequisite is violated. It neither requests administrative permissions nor exposes protection configuration. Tokens are scoped to the same installation, target repository, and operation permissions.
 
@@ -68,7 +70,7 @@ GitHub enforces repository protections. **Administrators must keep the App free 
 
 This repository is a Hermes directory plugin (`plugin.yaml`, root `__init__.py`) and a Python package. A future administrator installation must use the same dependency runtime as Hermes, enable `hermes-github-app`, and select the `github_app` toolset. Merely copying or reviewing this repository does not enable it.
 
-Configuration and key contents are startup snapshots. Restart the plugin's Hermes process to change policy or credentials. Files are still checked on every operation for presence/ownership/mode/isolation; removing or exposing them refuses calls. Restoring safe files does not change the loaded contents. Invalid startup omits this plugin's tool and leaves Hermes running. Diagnostics never echo raw credentials or rejected config values.
+Configuration and key contents are startup snapshots. Restart the plugin's Hermes process to change policy or credentials. Every operation checks file presence, regular-file status, ownership, modes, symlinks, and parent-directory permissions; a failed check refuses the call. These checks do not detect exposure through mounts or other host tools. Restoring safe files does not change the loaded contents. Invalid startup omits this plugin's tool and leaves Hermes running. Diagnostics never echo raw credentials or rejected config values.
 
 ## Development verification
 
@@ -79,3 +81,5 @@ HERMES_GITHUB_APP_HERMES_SOURCE=/absolute/path/to/hermes-agent python -m pytest 
 ```
 
 The native smoke registers the tools through Hermes's public `PluginContext`, then dispatches them through Hermes's normal tool path with a fake GitHub service. It checks that string integers, string booleans, and unknown fields are rejected, and that an existing security hook can still block a call. No live GitHub operations, production secrets, or installed profile changes are used.
+
+The operator-run [`tools/gormes_coexistence_probe.py`](tools/gormes_coexistence_probe.py) requires a prepared, fresh isolated profile. It exercises the installed Gormes hooks and Orpheus adapter with deterministic GitHub HTTP responses and a deterministic child lifecycle, plus real Docker execution and same-process container reuse. It distinguishes refusal by the unchanged host allowlist from an in-memory candidate that adds the fourteen names; it makes no production policy or profile changes. Cross-process container reuse is not tested. Set `HERMES_GITHUB_APP_GORMES_RECEIPT` to a saved probe receipt to enable its optional pytest validation, which binds the evidence to hashes of the current product modules and probe source.
