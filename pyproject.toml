@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-github-app"
-version = "0.2.0"
+version = "0.1.0"
 description = "Policy-bound host GitHub App tools for Hermes"
 requires-python = ">=3.11"
 dependencies = ["httpx>=0.27,<1", "PyJWT[crypto]>=2.9,<3", "ruamel.yaml>=0.18,<0.19"]
