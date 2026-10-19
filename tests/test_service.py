@@ -102,3 +102,30 @@ def test_merge_explicit_policy_deny_never_authenticates():
     p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':'write','allow_actions':['pr_merge'],'deny_actions':['pr_merge']})
     result=GitHubService(p,client).execute('pr_merge','acme/demo',params,recheck_isolation=lambda:None)
     assert result['code']=='policy_denied';client.session.assert_not_called()
+
+
+def test_inline_profiles_without_explicit_allow_refuse_before_auth():
+    from hermes_github_app.policy import Policy
+    params={'number':1,'body':'Comment','commit_id':'a'*40,'path':'src/main.py','line':2,'side':'RIGHT'}
+    for access in ('read','write'):
+        p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':access})
+        client=Mock()
+        result=GitHubService(p,client).execute('pr_review_comment','acme/demo',params,recheck_isolation=lambda:None)
+        assert result['code']=='policy_denied'
+        client.session.assert_not_called()
+
+
+def test_inline_malicious_args_never_reach_auth():
+    from hermes_github_app.policy import Policy
+    p=Policy.from_dict({'repositories':{'mode':'all','exclude':[]},'default_access':'read','allow_actions':['pr_review_comment']})
+    valid={'number':1,'body':'Comment','commit_id':'a'*40,'path':'src/main.py','line':2,'side':'RIGHT'}
+    invalid=[{'line':'2'},{'line':True},{'line':0},{'number':False},{'body':'  '},
+        {'path':'../secret'},{'path':'/etc/passwd'},{'path':'a\\b'},{'side':'right'},
+        {'commit_id':'HEAD'},{'start_line':1},{'start_side':'RIGHT'},
+        {'start_line':1,'start_side':'LEFT'},{'start_line':2,'start_side':'RIGHT'},
+        {'position':2},{'in_reply_to':42},{'subject_type':'file'},{'url':'https://evil.invalid'}]
+    client=Mock()
+    for overrides in invalid:
+        result=GitHubService(p,client).execute('pr_review_comment','acme/demo',{**valid,**overrides},recheck_isolation=lambda:None)
+        assert result['code']=='invalid_arguments',overrides
+    client.session.assert_not_called()

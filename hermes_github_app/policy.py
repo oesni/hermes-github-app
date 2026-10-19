@@ -1,4 +1,4 @@
-"""Version-one profiles, repository selection and deny-wins exceptions."""
+"""Repository selection, access profiles, repository selection and deny-wins exceptions."""
 from dataclasses import dataclass
 from types import MappingProxyType
 from .actions import ACTIONS, READ_ACTIONS, WRITE_ACTIONS, ActionError, canonical_repo
