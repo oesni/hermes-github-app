@@ -99,4 +99,4 @@ def parse_config(text: str | bytes) -> Config:
         policy = Policy.from_dict(root["policy"])
     except PolicyError:
         raise ConfigError("configuration policy field/type/action error") from None
-    return Config(1, auth_config, policy)
+    return Config(root["version"], auth_config, policy)

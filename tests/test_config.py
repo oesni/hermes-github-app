@@ -40,7 +40,7 @@ class ConfigTests(unittest.TestCase):
                 parse_config(BASE.replace("app_id: 12345", "app_id: " + value))
         cfg = parse_config(BASE.replace("app_id: 12345", "app_id: " + str(2**63 - 1)))
         self.assertEqual(cfg.auth.app_id, 2**63 - 1)
-        for value in ['"1"', "true", "2"]:
+        for value in ['"1"', "true", "3"]:
             with self.assertRaises(ConfigError):
                 parse_config(BASE.replace("version: 1", "version: " + value))
 
@@ -117,3 +117,24 @@ class ConfigTests(unittest.TestCase):
                 for block in [f"  {field}: [{action}]\n", f"  repository_rules: {{acme/a: {{{field}: [{action}]}}}}\n"]:
                     with self.subTest(action=action, field=field, block=block), self.assertRaises(ConfigError):
                         parse_config(BASE + block)
+
+
+class InlineCommentConfigTests(unittest.TestCase):
+    def test_version_one_inline_comment_requires_explicit_allow(self):
+        parsed = parse_config(BASE + "  allow_actions: [pr_review_comment]\n")
+        self.assertEqual(parsed.version, 1)
+        parsed.policy.authorize("acme/repo", "pr_review_comment")
+        with self.assertRaises(PolicyError):
+            parse_config(BASE).policy.authorize("acme/repo", "pr_review_comment")
+        for version in ["2", "3", "true", '\"1\"']:
+            with self.subTest(version=version), self.assertRaises(ConfigError):
+                parse_config(BASE.replace("version: 1", "version: " + version))
+
+    def test_inline_review_example_is_scoped_and_cannot_merge(self):
+        path = Path(__file__).resolve().parents[1] / "examples/inline-review.yaml"
+        config = parse_config(path.read_bytes())
+        self.assertEqual(config.version, 1)
+        self.assertEqual(config.policy.authorize("Acme/Demo", "pr_review_comment"), "acme/demo")
+        for repo, action in [("acme/other", "pr_review_comment"), ("acme/demo", "pr_merge"), ("acme/demo", "issue_create")]:
+            with self.subTest(repo=repo, action=action), self.assertRaises(PolicyError):
+                config.policy.authorize(repo, action)

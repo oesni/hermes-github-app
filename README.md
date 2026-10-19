@@ -12,7 +12,7 @@ This revision registers individual operation tools using the action names below.
 
 Configuration actions in this revision:
 
-`repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `issue_create`, `issue_comment`, `pr_list`, `pr_get`, `pr_comments_list`, `pr_create`, `pr_comment`, `branch_create`, `pr_merge`.
+`repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `issue_create`, `issue_comment`, `pr_list`, `pr_get`, `pr_comments_list`, `pr_create`, `pr_comment`, `pr_review_comment`, `branch_create`, `pr_merge`.
 
 The read profile contains 8 actions and the write profile contains 13. Operations outside those profiles require explicit allowances.
 

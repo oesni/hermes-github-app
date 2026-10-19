@@ -6,6 +6,9 @@ SHA = "a" * 40
 FIXTURES = {"repo_get": {}, "contents_read": {"path": "README.md"}, "issue_list": {}, "issue_get": {"number": 1}, "issue_comments_list": {"number": 1}, "issue_create": {"title": "Report"}, "issue_comment": {"number": 1, "body": "Hello"}, "pr_list": {}, "pr_get": {"number": 2}, "pr_comments_list": {"number": 2}, "pr_create": {"title": "Change", "head": "feature/a", "base": "main"}, "pr_comment": {"number": 2, "body": "Review"}, "branch_create": {"branch": "new", "source_commit_sha": SHA}, "pr_merge": {"number": 1, "expected_head_sha": SHA, "merge_method": "squash"}}
 
 
+FIXTURES["pr_review_comment"] = {"number": 2, "body": "Review", "commit_id": SHA, "path": "src/main.py", "line": 10, "side": "RIGHT"}
+
+
 class ActionsTests(unittest.TestCase):
     def test_closed_catalog_and_transport_overrides(self):
         self.assertEqual(set(FIXTURES), set(ACTIONS))
@@ -109,6 +112,7 @@ class ActionsTests(unittest.TestCase):
             "pr_create": ("POST", "/repos/acme/repo/pulls"),
             "pr_comment": ("POST", "/repos/acme/repo/issues/2/comments"),
             "branch_create": ("POST", "/repos/acme/repo/git/refs"),
+            "pr_review_comment": ("POST", "/repos/acme/repo/pulls/2/comments"),
             "pr_merge": ("PUT", "/repos/acme/repo/pulls/1/merge"),
         }
         self.assertEqual(set(expected), set(ACTIONS))
@@ -116,3 +120,25 @@ class ActionsTests(unittest.TestCase):
             with self.subTest(action=action):
                 request = build_request(action, "acme/repo", FIXTURES[action])
                 self.assertEqual((request.method, request.path), target)
+
+
+class InlineReviewTests(unittest.TestCase):
+    def test_single_and_multiline_request(self):
+        for side in ["LEFT", "RIGHT"]:
+            for extra in [{}, {"start_line": 2, "start_side": side}]:
+                params = dict(FIXTURES["pr_review_comment"], side=side, commit_id=SHA.upper(), **extra)
+                request = build_request("pr_review_comment", "acme/repo", params)
+                self.assertEqual(request.path, "/repos/acme/repo/pulls/2/comments")
+                self.assertEqual(request.body, {k: (SHA if k == "commit_id" else v) for k, v in params.items() if k != "number"})
+                self.assertEqual(request.query, {})
+        self.assertEqual(ACTIONS["pr_review_comment"].permissions, {"pull_requests": "write"})
+
+    def test_invalid_coordinates_and_unsupported_forms(self):
+        cases = [{"line": x} for x in [True, 0, -1, "10", 2**31, None]]
+        cases += [{"path": x} for x in ["", " ", "/a", "../a", "a/../b", "a//b", "a/./b", "a\\b", "a\n", "a\0", "a" * 4097]]
+        cases += [{"side": x} for x in ["left", "BOTH", [], None]]
+        cases += [{"start_line": 2}, {"start_side": "RIGHT"}, {"start_line": 10, "start_side": "RIGHT"}, {"start_line": 11, "start_side": "RIGHT"}, {"start_line": True, "start_side": "RIGHT"}, {"start_line": 2, "start_side": "LEFT"}, {"in_reply_to": 3}, {"subject_type": "file"}, {"position": 4}, {"commit_id": "main"}]
+        for change in cases:
+            with self.subTest(change=change), self.assertRaises(ActionError):
+                validate_params("pr_review_comment", dict(FIXTURES["pr_review_comment"], **change))
+        self.assertEqual(validate_params("pr_review_comment", dict(FIXTURES["pr_review_comment"], line=2**31-1))["line"], 2**31-1)
