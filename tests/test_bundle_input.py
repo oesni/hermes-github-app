@@ -94,3 +94,9 @@ def test_real_reader_refuses_non_regular_and_empty_input(tmp_path,kind):
         return json.dumps({'exit_code':result.returncode,'output':result.stdout})
     with pytest.raises(bundle_input.BundleInputError):
         bundle_input.resolve_bundle_path(dispatcher,str(path),{'task_id':'t'},10000)
+
+
+@pytest.mark.parametrize("path",["/sandbox/a\u0080", "/sandbox/a\u009f"])
+def test_c1_control_paths_rejected(path):
+    with pytest.raises(bundle_input.BundleInputError):
+        bundle_input.validate_bundle_path(path)

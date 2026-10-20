@@ -27,6 +27,9 @@ class GitHubService:
             params=validate_params(action,params)
             if action == 'git_push' and 'bundle_path' in params:
                 raise ActionError('Bundle path requires native tool dispatch.')
+            if action == 'git_push':
+                from .git_push import require_supported_host
+                require_supported_host()
             request=build_request(action,canonical,params)
             session=self.client.session(canonical,ACTIONS[action].permissions)
             # Session establishes GitHub's canonical name; policy must cover it too.

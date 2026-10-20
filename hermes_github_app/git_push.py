@@ -28,15 +28,21 @@ def decode_bundle(value):
     return data
 
 
+def require_supported_host():
+    if os.name != 'posix' or not sys.platform.startswith('linux'):
+        raise ClientError('Git publication requires a Linux host with resource limits.', 'git_unavailable')
+
+
 def _remote(repo):
     return 'https://github.com/' + repo + '.git'
 
 
 def _run(repo_path, args, deadline, token=None, mutation=False):
+    require_supported_host()
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise ClientError('Git operation timed out.', 'git_unavailable')
-    git = shutil.which('git', path='/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin')
+    git = shutil.which('git', path='/usr/bin:/bin:/usr/local/bin')
     if git is None or os.name != 'posix':
         raise ClientError('A supported host Git executable is required.', 'git_unavailable')
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(repo_path), 'LANG': 'C', 'LC_ALL': 'C',
@@ -50,7 +56,8 @@ def _run(repo_path, args, deadline, token=None, mutation=False):
                '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null',
                '-c', 'http.followRedirects=false', '-c', 'http.sslVerify=true',
                '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always',
-               '-c', 'core.attributesFile=/dev/null', '-c', 'pack.threads=1',
+               '-c', 'core.attributesFile=/dev/null', '-c', 'maintenance.auto=false',
+               '-c', 'gc.auto=0', '-c', 'pack.threads=1',
                '-c', 'pack.windowMemory=16m', '-c', 'core.deltaBaseCacheLimit=16m', *args]
     try:
         with tempfile.TemporaryFile() as output:
@@ -59,8 +66,12 @@ def _run(repo_path, args, deadline, token=None, mutation=False):
             try:
                 process.wait(timeout=min(remaining, 60))
             except BaseException:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    process.wait()
                 raise
             if output.tell() > MAX_OUTPUT_BYTES:
                 raise ValueError()
@@ -76,13 +87,21 @@ def _run(repo_path, args, deadline, token=None, mutation=False):
 
 
 def publish(session, params, recheck):
-    data = decode_bundle(params['bundle_base64'])
+    require_supported_host()
+    try:
+        data = decode_bundle(params['bundle_base64'])
+    except Exception:
+        raise ClientError('Invalid Git bundle.', 'invalid_arguments') from None
     header, separator, pack = data.partition(b'\n\n')
     lines = header.split(b'\n')
     advertised = (params['commit_sha'] + ' refs/heads/' + params['branch']).encode()
     if (not separator or len(header) > 4096 or not pack.startswith(b'PACK')
             or lines[0] != b'# v2 git bundle' or lines[-1] != advertised):
         raise ClientError('Invalid Git bundle.', 'invalid_arguments')
+    if len(pack) < 32 or int.from_bytes(pack[4:8], 'big') not in {2, 3}:
+        raise ClientError('Invalid Git pack header.', 'invalid_arguments')
+    if int.from_bytes(pack[8:12], 'big') > MAX_OBJECTS:
+        raise ClientError('Git pack object count exceeds the limit.', 'size_limit')
     prerequisites = lines[1:-1]
     expected = params['expected_head_sha']
     if prerequisites:
@@ -103,15 +122,16 @@ def publish(session, params, recheck):
         def run(args, *, network=False, mutation=False):
             return _run(root, args, deadline, session._token if network else None, mutation)
 
-        def required(args, *, network=False):
+        def required(args, *, network=False, error_code='git_unavailable'):
             code, out = run(args, network=network)
             if code:
-                raise ClientError('Git data could not be verified.', 'git_unavailable')
+                raise ClientError('Git data could not be verified.', error_code)
             return out
 
         required(['init', '--bare', '--template=', '--object-format=sha1', '.'])
         remote_head = required(['ls-remote', '--refs', _remote(session.repo), ref], network=True)
-        rows = remote_head.splitlines()
+        rows = [line for line in remote_head.splitlines()
+                if line.split(b'\t')[-1] == ref.encode()]
         if expected is None:
             matches = not rows
         else:
@@ -124,12 +144,14 @@ def publish(session, params, recheck):
             if required(['rev-parse', '--verify', 'FETCH_HEAD']).strip() != expected.encode():
                 raise ClientError('Git prerequisite changed.', 'target_changed')
             required(['update-ref', 'refs/heads/bundle-base', expected])
-        required(['bundle', 'verify', str(bundle)])
-        required(['bundle', 'unbundle', str(bundle)])
-        required(['fsck', '--strict', '--no-reflogs'])
-        kind = required(['cat-file', '-t', params['commit_sha']]).strip()
+        required(['bundle', 'verify', str(bundle)], error_code='invalid_arguments')
+        required(['bundle', 'unbundle', str(bundle)], error_code='invalid_arguments')
+        kind = required(['cat-file', '-t', params['commit_sha']], error_code='invalid_arguments').strip()
         if kind != b'commit':
             raise ClientError('Bundle target must be a commit.', 'invalid_arguments')
+        required(['update-ref', 'refs/heads/publication-target', params['commit_sha']],
+                 error_code='invalid_arguments')
+        required(['fsck', '--strict', '--no-reflogs'], error_code='invalid_arguments')
         listing = required(['cat-file', '--batch-all-objects', '--batch-check=%(objectsize)'])
         sizes = listing.splitlines()
         if len(sizes) > MAX_OBJECTS or sum(int(size) for size in sizes) > MAX_OBJECT_BYTES:

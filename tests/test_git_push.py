@@ -1,6 +1,7 @@
 """Offline integration tests publish real Git objects to disposable bare remotes."""
 import base64
 import subprocess
+import sys
 import time
 from unittest.mock import Mock
 
@@ -19,6 +20,8 @@ def repositories(tmp_path):
 
 @pytest.fixture
 def transport(monkeypatch, repositories):
+    if not sys.platform.startswith("linux"):
+        pytest.skip("Git publication requires Linux resource limits")
     from hermes_github_app import git_push
     monkeypatch.setattr(git_push, '_remote', lambda repo: str(repositories.remote))
     original = git_push._run
@@ -242,6 +245,7 @@ def test_push_failure_is_uncertain_without_retry_or_secret_error(transport, repo
     assert 'private-local-detail' not in str(error.value)
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux Git worker")
 def test_subprocess_receives_clean_environment_and_no_token_in_command(monkeypatch,tmp_path):
     from hermes_github_app import git_push
     captured = []
@@ -275,6 +279,7 @@ def test_bundle_encoding_and_size_validation():
     assert decode_bundle('YQ==') == b'a'
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux Git worker")
 def test_timeout_kills_group_and_redacts_process_error(monkeypatch,tmp_path):
     from hermes_github_app import git_push
     killed=[]
@@ -318,3 +323,93 @@ def test_concurrent_same_tip_is_not_misreported_as_our_publication(transport,rep
         transport.publish(session(),params,lambda:None)
     assert error.value.code=='uncertain_outcome'
     assert injected and repositories.remote_head('main')==repositories.head
+
+
+@pytest.mark.skipif(sys.platform.startswith('linux'),reason='Tests actual unsupported host')
+def test_unsupported_host_refuses_before_git_subprocess(repositories,monkeypatch):
+    from hermes_github_app import git_push
+    spawn=Mock();monkeypatch.setattr(git_push.subprocess,'Popen',spawn)
+    with pytest.raises(ClientError) as error:
+        git_push.publish(session(),arguments(repositories),lambda:None)
+    assert error.value.code=='git_unavailable'
+    spawn.assert_not_called()
+
+
+def test_noop_preserves_existing_commit(transport,repositories):
+    git(repositories.work,'push',str(repositories.remote),'HEAD:refs/heads/main')
+    result=transport.publish(session(),arguments(repositories,branch='main',expected=repositories.head),lambda:None)
+    assert result['sha']==repositories.head and not result['created']
+    assert repositories.remote_head('main')==repositories.head
+
+
+@pytest.mark.parametrize('prerequisites',['mismatched','multiple'])
+def test_invalid_prerequisites_are_rejected(transport,repositories,prerequisites):
+    params=arguments(repositories,branch='main',expected=repositories.initial,incremental=True)
+    raw=base64.b64decode(params['bundle_base64'])
+    if prerequisites=='mismatched':
+        raw=raw.replace(('-'+repositories.initial).encode(),b'-'+b'a'*40,1)
+    else:
+        raw=raw.replace(b'\n',b'\n-'+b'a'*40+b' additional\n',1)
+    params['bundle_base64']=base64.b64encode(raw).decode()
+    with pytest.raises(ClientError) as error:transport.publish(session(),params,lambda:None)
+    assert error.value.code=='invalid_arguments'
+    assert repositories.remote_head('main')==repositories.initial
+
+
+def test_pack_object_count_rejected_before_git(transport,repositories,monkeypatch):
+    params=arguments(repositories)
+    header,pack=base64.b64decode(params['bundle_base64']).split(b'\n\n',1)
+    pack=pack[:8]+(transport.MAX_OBJECTS+1).to_bytes(4,'big')+pack[12:]
+    params['bundle_base64']=base64.b64encode(header+b'\n\n'+pack).decode()
+    run=Mock();monkeypatch.setattr(transport,'_run',run)
+    with pytest.raises(ClientError):transport.publish(session(),params,lambda:None)
+    run.assert_not_called()
+
+
+def test_tail_matching_remote_ref_does_not_hide_exact_branch(transport,repositories):
+    git(repositories.remote,'update-ref','refs/heads/a/refs/heads/feature',repositories.initial)
+    transport.publish(session(),arguments(repositories),lambda:None)
+    assert repositories.remote_head('feature')==repositories.head
+    assert repositories.remote_head('a/refs/heads/feature')==repositories.initial
+
+
+def test_missing_tree_refused_before_push(transport,repositories,monkeypatch):
+    params=arguments(repositories)
+    original=transport._run
+    pushed=[]
+    # A bundle with a commit referring to an absent tree is produced by pack-objects
+    # with an explicit object list, bypassing Git's normal closure traversal.
+    tree='f'*40
+    body=f'tree {tree}\nauthor A <a@example.invalid> 1 +0000\ncommitter A <a@example.invalid> 1 +0000\n\nMissing tree\n'.encode()
+    sha=git(repositories.work,'hash-object','-t','commit','-w','--stdin',input=body).decode().strip()
+    packed=git(repositories.work,'pack-objects','--stdout',input=(sha+'\n').encode())
+    params['commit_sha']=sha
+    params['bundle_base64']=base64.b64encode(('# v2 git bundle\n'+sha+' refs/heads/feature\n\n').encode()+packed).decode()
+    def observe(root,args,*a,**kw):
+        if 'push' in args:pushed.append(args)
+        return original(root,args,*a,**kw)
+    monkeypatch.setattr(transport,'_run',observe)
+    with pytest.raises(ClientError) as error:transport.publish(session(),params,lambda:None)
+    assert error.value.code=='invalid_arguments'
+    assert not pushed
+
+
+def test_receive_pack_rechecks_old_sha_after_pre_receive(transport,repositories,monkeypatch,tmp_path):
+    params=arguments(repositories,branch='main',expected=repositories.initial)
+    competing=repositories.commit('concurrent.txt',b'concurrent','Competing commit')
+    git(repositories.work,'push',str(repositories.remote),competing+':refs/heads/competing')
+    hook=repositories.remote/'hooks'/'pre-receive'
+    hook.write_text('#!/bin/sh\nunset GIT_QUARANTINE_PATH\ngit update-ref refs/heads/main '+competing+'\n')
+    hook.chmod(0o700)
+    wrapper=tmp_path/'receive-pack'
+    wrapper.write_text('#!/bin/sh\nexec /usr/bin/git -c core.hooksPath="'+str(repositories.remote/'hooks')+'" receive-pack "$@"\n')
+    wrapper.chmod(0o700)
+    original=transport._run
+    def remote_hook(root,args,*a,**kw):
+        if 'push' in args:
+            index=args.index('push')+1
+            args=[*args[:index],'--receive-pack='+str(wrapper),*args[index:]]
+        return original(root,args,*a,**kw)
+    monkeypatch.setattr(transport,'_run',remote_hook)
+    with pytest.raises(ClientError):transport.publish(session(),params,lambda:None)
+    assert repositories.remote_head('main')==competing

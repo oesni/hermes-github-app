@@ -1,6 +1,7 @@
 """Opt-in real Docker producer → public tool → host Git publication."""
 import json
 import os
+import sys
 from pathlib import Path
 import subprocess
 from unittest.mock import Mock
@@ -15,6 +16,7 @@ from hermes_github_app.client import Session
 import time
 
 
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux publication host required')
 @pytest.mark.skipif(not os.getenv('HERMES_GITHUB_APP_DOCKER_IMAGE'), reason='opt-in isolated Docker integration')
 def test_docker_bundle_path_public_handler(monkeypatch,tmp_path):
     image=os.environ['HERMES_GITHUB_APP_DOCKER_IMAGE']

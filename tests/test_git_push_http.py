@@ -1,5 +1,7 @@
 """Exercise real Git HTTP authentication without any external service or secret."""
 import base64
+import sys
+import pytest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import subprocess
@@ -12,7 +14,9 @@ from git_fixtures import Repository, git
 from hermes_github_app import git_push
 
 
-def test_http_askpass_publishes_with_host_only_token(tmp_path, monkeypatch):
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux Git worker")
+@pytest.mark.parametrize("incremental", [False, True])
+def test_http_askpass_publishes_with_host_only_token(tmp_path, monkeypatch, incremental):
     repositories = Repository(tmp_path)
     git(repositories.remote, 'config', 'http.receivepack', 'true')
     token = 'fake-installation-token-for-local-test'
@@ -74,8 +78,9 @@ def test_http_askpass_publishes_with_host_only_token(tmp_path, monkeypatch):
 
     monkeypatch.setattr(git_push, '_run', local_http)
     session = SimpleNamespace(repo='acme/demo', _token=token, deadline=time.monotonic() + 120)
-    params = {'branch': 'feature', 'commit_sha': repositories.head, 'expected_head_sha': None,
-              'bundle_base64': repositories.bundle('feature')}
+    branch = 'main' if incremental else 'feature'
+    params = {'branch': branch, 'commit_sha': repositories.head, 'expected_head_sha': repositories.initial if incremental else None,
+              'bundle_base64': repositories.bundle(branch, incremental=incremental)}
     try:
         result = git_push.publish(session, params, lambda: None)
     finally:
@@ -84,5 +89,5 @@ def test_http_askpass_publishes_with_host_only_token(tmp_path, monkeypatch):
         thread.join(timeout=5)
     assert authenticated and rejected
     assert token not in repr(result)
-    assert repositories.remote_head('feature') == repositories.head
+    assert repositories.remote_head(branch) == repositories.head
     assert any('push' in args for args in inputs)

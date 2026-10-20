@@ -52,7 +52,7 @@ class BundleInputError(ValueError):
 
 def validate_bundle_path(path):
     if (not isinstance(path, str) or not path.startswith('/') or len(path) > 4096
-            or any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in path)):
+            or any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF for c in path)):
         raise BundleInputError('Invalid sandbox bundle path.')
     return path
 

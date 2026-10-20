@@ -74,7 +74,7 @@ Call `github_git_push` with the actual SHA printed by the last command:
 {"repo":"acme/demo","branch":"feat/parser-fix","commit_sha":"0123456789abcdef0123456789abcdef01234567","expected_head_sha":null,"bundle_path":"/tmp/parser-fix.bundle"}
 ```
 
-The path is read through the **active terminal backend**, including Docker; it is not a host path. The tool reads and verifies chunks without making the model copy base64. It requires an active terminal task context, Python 3 in that backend and sufficient terminal output limits. Calls without this context can instead supply `bundle_base64`; supplying both inputs is an error. Publication requires a POSIX host with Git available in a standard system executable directory; Windows hosts are unsupported. No GitHub credentials are installed in the sandbox.
+The path is read through the **active terminal backend**, including Docker. With a local backend, it is a host path readable with that backend's account permissions. The fixed reader uses public tool dispatch, which may run even when the calling profile does not enable the terminal toolset; it does not imply that model-level tool checks or hooks are applied to the nested call. The tool reads and verifies chunks without making the model copy base64. It requires an active terminal task context, Python 3 in that backend and sufficient terminal output limits. Calls without this context can instead supply `bundle_base64`; supplying both inputs is an error. Publication requires a POSIX host with Git available in a standard system executable directory; Windows hosts are unsupported. No GitHub credentials are installed in the sandbox.
 
 For subsequent commits, make an incremental bundle excluding the exact known remote branch head:
 
@@ -83,7 +83,7 @@ expected_head=$(git rev-parse refs/remotes/origin/feat/parser-fix)
 git bundle create /tmp/parser-fix.bundle refs/heads/feat/parser-fix "^$expected_head"
 ```
 
-Pass that exact value as `expected_head_sha`, the new local head as `commit_sha`, and the same bundle path. A stale tracking ref causes refusal if the actual remote head differs; it never authorizes overwriting concurrent work. Updates must be fast-forward. A successful plugin push does not update the local checkout's remote-tracking refs, so use the last confirmed remote head or refresh it through an independently authorized fetch before preparing the next bundle. A new branch requires a self-contained bundle; for a larger repository, create a branch at an existing verified base with `github_branch_create` first, then publish an incremental bundle. These two operations are not atomic.
+Pass that exact value as `expected_head_sha`, the new local head as `commit_sha`, and the same bundle path. A stale tracking ref causes refusal if the actual remote head differs; it never authorizes overwriting concurrent work. Updates must be fast-forward. A successful plugin push does not update the local checkout's remote-tracking refs, so use the last confirmed remote head or refresh it through an independently authorized fetch before preparing the next bundle. A new branch requires a self-contained bundle. To avoid transmitting its old history, first create a branch at an existing verified base with `github_branch_create` (which needs its own policy permission), then publish an incremental bundle. These two operations are not atomic. The fetched base snapshot still counts toward the operation limits, so this is not a workaround for an oversized snapshot. Incremental bundles with multiple prerequisites are refused; a no-op update requires a self-contained bundle.
 
 A host plugin with a public Hermes context can also dispatch the native tool programmatically, forwarding its active task context:
 
@@ -99,7 +99,7 @@ result = ctx.dispatch_tool(
 
 This example runs in the host plugin, not in arbitrary sandbox Python. An integration that supplies base64 directly replaces `bundle_path` with `bundle_base64` and can build the string programmatically without printing it into a model response.
 
-Publication preserves commit IDs and history, changes exactly one branch, and never force-rewrites, deletes, merges or retries an uncertain result. The decoded bundle limit is 32 MiB; Git object and deadline limits also apply. Git LFS object upload is not supported. GitHub protections and Contents write permission remain necessary, and workflow-file changes may need permissions this operation does not request. See the [complete publication contract](docs/spec/commit-push.md).
+Publication preserves commit IDs and history, changes exactly one branch, and never force-rewrites, deletes, merges or retries an uncertain result. The decoded bundle limit is 32 MiB and the bundle header limit is 4096 bytes. The entire imported repository, including a fetched base snapshot, must fit 100000 objects and 256 MiB of decoded object data. Git child processes also have a 64 MiB per-file limit (including a fetched pack), a 512 MiB address-space limit, and CPU/wall deadlines. Even a small update can exceed these limits. Git LFS object upload is not supported. GitHub protections and Contents write permission remain necessary, and workflow-file changes may need permissions this operation does not request. See the [complete publication contract](docs/spec/commit-push.md).
 
 ## Host boundary
 
@@ -120,6 +120,8 @@ Accepted modes are Hermes-owned `0400`/`0600`, or root-owned `0440`/`0640` reada
 All bundled examples deny `pr_merge` globally. To enable it for selected repositories, configure an explicit allowance without a conflicting global or repository denial. Merge uses the same host-enforced policy as other actions; there is no separate approval adapter or platform-specific configuration.
 
 A merge requires the PR number, expected head SHA, and explicit merge method. The host verifies the target and immediately rechecks protected-file metadata, policy, base/head branches, and head SHA before one dispatch. GitHub atomically checks the head SHA; its API cannot atomically bind the base branch, so retargeting after the final check remains possible. An uncertain mutation is never automatically retried.
+
+`git_push` can publish to any branch, including the default branch. Denying `pr_merge` does not prohibit direct pushes; use GitHub branch protections to require PRs. The plugin has no branch allowlist.
 
 GitHub enforces repository protections. **Administrators must keep the App free of applicable bypass grants.** The plugin does not independently audit protection/ruleset bypass status and cannot guarantee protection if that prerequisite is violated. It neither requests administrative permissions nor exposes protection configuration. Tokens are scoped to the same installation, target repository, and operation permissions.
 
