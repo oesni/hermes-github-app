@@ -25,10 +25,19 @@ class GitHubService:
             check_isolation(recheck_isolation)
             canonical=self.policy.authorize(repo,action)
             params=validate_params(action,params)
+            if action == 'git_push' and 'bundle_path' in params:
+                raise ActionError('Bundle path requires native tool dispatch.')
             request=build_request(action,canonical,params)
             session=self.client.session(canonical,ACTIONS[action].permissions)
             # Session establishes GitHub's canonical name; policy must cover it too.
             self.policy.authorize(session.repo,action)
+            if action == 'git_push':
+                from .git_push import publish
+                def recheck():
+                    check_isolation(recheck_isolation)
+                    self.policy.authorize(canonical, action)
+                    self.policy.authorize(session.repo, action)
+                return {'ok': True, 'data': publish(session, params, recheck)}
             if action!='pr_merge':
                 return {'ok':True,'data':session.execute(action,params,request)}
             target=session.inspect_merge(params)

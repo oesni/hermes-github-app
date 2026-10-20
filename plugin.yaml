@@ -4,6 +4,7 @@ version: 0.1.0
 kind: standalone
 description: Host-owned GitHub App credentials with per-repository action policy.
 provides_tools:
+  - github_git_push
   - github_repo_get
   - github_contents_read
   - github_issue_list

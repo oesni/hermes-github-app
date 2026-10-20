@@ -16,7 +16,7 @@ FIXTURES["pr_review_comment"] = {"number": 2, "body": "Review", "commit_id": SHA
 
 class ActionsTests(unittest.TestCase):
     def test_closed_catalog_and_transport_overrides(self):
-        self.assertEqual(set(FIXTURES), set(ACTIONS))
+        self.assertEqual(set(FIXTURES), set(ACTIONS) - {"git_push"})
         for action, params in FIXTURES.items():
             r = build_request(action, "Acme/Repo", params)
             self.assertTrue(r.path.startswith("/repos/acme/repo"))
@@ -127,7 +127,7 @@ class ActionsTests(unittest.TestCase):
             "pr_review_comment": ("POST", "/repos/acme/repo/pulls/2/comments"),
             "pr_merge": ("PUT", "/repos/acme/repo/pulls/1/merge"),
         }
-        self.assertEqual(set(expected), set(ACTIONS))
+        self.assertEqual(set(expected), set(ACTIONS) - {"git_push"})
         for action, target in expected.items():
             with self.subTest(action=action):
                 request = build_request(action, "acme/repo", FIXTURES[action])

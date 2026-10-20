@@ -30,6 +30,7 @@ class Request:
 
 
 ACTIONS = {
+    "git_push": ActionSpec("contents", "write"),
     "repo_get": ActionSpec("metadata", "read"),
     "contents_read": ActionSpec("contents", "read"),
     "issue_list": ActionSpec("issues", "read"),
@@ -112,6 +113,7 @@ def valid_ref(value, name="ref", branch=False):
 
 
 _SCHEMAS = {
+    "git_push": ({"branch", "commit_sha", "expected_head_sha"}, {"bundle_base64", "bundle_path"}),
     "repo_get": (set(), set()),
     "contents_read": ({"path"}, {"ref"}),
     "issue_list": (set(), {"state", "page", "per_page"}),
@@ -152,6 +154,25 @@ def validate_params(action, params):
     if not required <= params.keys() or params.keys() - required - optional:
         raise ActionError("missing or unsupported action parameters")
     result = dict(params)
+    if action == "git_push":
+        from .git_push import decode_bundle
+        result["branch"] = valid_ref(result["branch"], "branch", branch=True)
+        for field in ("commit_sha", "expected_head_sha"):
+            if field == "expected_head_sha" and result[field] is None:
+                continue
+            result[field] = valid_sha(result[field], field)
+            if len(result[field]) != 40:
+                raise ActionError("git_push requires SHA-1 object IDs")
+        if ("bundle_base64" in result) == ("bundle_path" in result):
+            raise ActionError("exactly one bundle input is required")
+        try:
+            if "bundle_path" in result:
+                from .bundle_input import validate_bundle_path
+                validate_bundle_path(result["bundle_path"])
+            else:
+                decode_bundle(result["bundle_base64"])
+        except Exception:
+            raise ActionError("invalid bundle") from None
     if "number" in result:
         result["number"] = _integer(result["number"], "number")
     if "comment_id" in result:
@@ -229,6 +250,8 @@ def build_request(action: str, repo: str, params: dict) -> Request:
     repo = canonical_repo(repo)
     p = validate_params(action, params)
     prefix = f"/repos/{repo}"
+    if action == "git_push":
+        return Request("GIT", prefix, {}, None)
     if action in {"issue_comment_get", "pr_review_comment_get", "issue_comment_reaction", "pr_review_comment_reaction"}:
         resource = "issues" if action.startswith("issue_") else "pulls"
         path = prefix + f"/{resource}/comments/{p['comment_id']}"

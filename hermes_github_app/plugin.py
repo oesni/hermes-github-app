@@ -12,6 +12,8 @@ from .isolation import IsolationError
 from .runtime import HostBoundary
 from .secure_files import SecureFileError, read_secure_file
 from .service import GitHubService
+from .policy import PolicyError
+from .bundle_input import BundleInputError, resolve_bundle_path
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ def _open_host_service():
     return runtime, client, service
 
 
-def _execute_host_operation(runtime, service, action, args):
+def _execute_host_operation(runtime, service, action, args, *, dispatcher=None, context=None):
     """Validate and execute one closed operation for a registered tool."""
     try:
         runtime.check()
@@ -72,7 +74,19 @@ def _execute_host_operation(runtime, service, action, args):
         repo = canonical_repo(args['repo'])
         params = {key: value for key, value in args.items() if key != 'repo'}
         validate_params(action, params)
+        if action == 'git_push' and 'bundle_path' in params:
+            # Policy precedes sandbox reads; the service repeats policy/isolation
+            # checks after transfer and immediately before the remote write.
+            service.policy.authorize(repo, action)
+            from .git_push import MAX_BUNDLE_BYTES
+            encoded = resolve_bundle_path(dispatcher, params['bundle_path'], context, MAX_BUNDLE_BYTES)
+            params = {key: value for key, value in params.items() if key != 'bundle_path'}
+            params['bundle_base64'] = encoded
         return service.execute(action, repo, params, recheck_isolation=runtime.check)
+    except PolicyError:
+        return {'ok': False, 'code': 'policy_denied', 'error': 'GitHub action is not permitted.'}
+    except BundleInputError:
+        return {'ok': False, 'code': 'bundle_unavailable', 'error': 'Sandbox bundle could not be read safely in the active terminal task.'}
     except ActionError:
         return {'ok': False, 'code': 'invalid_arguments', 'error': 'Invalid tool arguments.'}
     except (IsolationError, SecureFileError):
@@ -89,7 +103,8 @@ def register(ctx):
 
     def make_handler(action):
         def invoke(args, **kwargs):
-            return json.dumps(_execute_host_operation(runtime, service, action, args), ensure_ascii=False)
+            return json.dumps(_execute_host_operation(runtime, service, action, args,
+                            dispatcher=getattr(ctx, 'dispatch_tool', None), context=kwargs), ensure_ascii=False)
         return invoke
 
     def close():
@@ -112,7 +127,14 @@ def tool_schema(action):
     properties = {'repo': {'type': 'string', 'description': 'Exact owner/repository'}}
     for field in sorted(required | optional):
         prop = {'type': 'string'}
-        if field in {'number', 'comment_id', 'page', 'per_page', 'line', 'start_line'}:
+        if field == 'expected_head_sha' and action == 'git_push':
+            prop = {'anyOf': [{'type': 'string', 'pattern': '^[a-fA-F0-9]{40}$'}, {'type': 'null'}]}
+        elif field == 'bundle_path':
+            prop.update(minLength=1, maxLength=4096, description='Absolute Git bundle path in the active terminal sandbox; requires terminal task context and python3.')
+        elif field == 'bundle_base64':
+            from .git_push import MAX_BUNDLE_BYTES
+            prop.update(maxLength=4 * ((MAX_BUNDLE_BYTES + 2) // 3))
+        elif field in {'number', 'comment_id', 'page', 'per_page', 'line', 'start_line'}:
             maximum = {'number': 2**31 - 1, 'comment_id': 2**63 - 1, 'page': 10000, 'per_page': 100, 'line': 2**31 - 1, 'start_line': 2**31 - 1}[field]
             # Hermes coerces property.type integer/boolean strings before the
             # handler. An equivalent single-branch anyOf preserves the raw
@@ -137,6 +159,8 @@ def tool_schema(action):
             prop['maxLength'] = 256 if field == 'title' else 65536
         properties[field] = prop
     description = action.replace('_', ' ').capitalize() + ' under host repository policy.'
+    if action == 'git_push':
+        description += ' Supply exactly one of bundle_path (active terminal sandbox) or bundle_base64 (direct data). Publish a bounded Git bundle without exposing credentials. Requires explicit allowance; expected_head_sha is null for creation or the exact current head for a fast-forward. Never retries uncertain pushes.'
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
     if action in {'issue_comment_get', 'pr_review_comment_get'}:
