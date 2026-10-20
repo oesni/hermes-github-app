@@ -16,14 +16,15 @@ from .service import GitHubService
 logger = logging.getLogger(__name__)
 
 
-def register(ctx):
+def _open_host_service():
     client = runtime = None
+    ready = False
     stage = "config_path"
     try:
         path = os.environ.get('HERMES_GITHUB_APP_CONFIG')
         if not path:
             logger.warning('GitHub App unavailable: configuration path is missing.')
-            return
+            return None
         config_bytes = read_secure_file(path, 1024 * 1024)
         stage = "configuration"
         config = parse_config(config_bytes)
@@ -36,39 +37,59 @@ def register(ctx):
         stage = "private_key"
         client = GitHubClient(**asdict(config.auth))
         service = GitHubService(config.policy, client)
+        ready = True
     except ConfigError as exc:
         # ConfigError is contractually value-free and safe to show to the admin.
         logger.warning('GitHub App unavailable: %s', exc)
-        return
+        return None
     except SecureFileError as exc:
         logger.warning("GitHub App unavailable: %s %s check failed.", stage, exc.category)
-        return
+        return None
     except IsolationError:
         logger.warning('GitHub App unavailable: protected-file check failed.')
-        return
+        return None
     except Exception:
-        if client is not None:
-            client.close()
         logger.warning('GitHub App unavailable: %s validation failed.', stage)
+        return None
+    finally:
+        if not ready:
+            for resource in (client, runtime):
+                if resource is not None:
+                    try:
+                        resource.close()
+                    except Exception:
+                        pass
+
+    return runtime, client, service
+
+
+def _execute_host_operation(runtime, service, action, args):
+    """Validate and execute one closed operation for a registered tool."""
+    try:
+        runtime.check()
+        if not isinstance(args, dict) or 'repo' not in args:
+            raise ActionError('missing repo')
+        repo = canonical_repo(args['repo'])
+        params = {key: value for key, value in args.items() if key != 'repo'}
+        validate_params(action, params)
+        return service.execute(action, repo, params, recheck_isolation=runtime.check)
+    except ActionError:
+        return {'ok': False, 'code': 'invalid_arguments', 'error': 'Invalid tool arguments.'}
+    except (IsolationError, SecureFileError):
+        return {'ok': False, 'code': 'isolation_refusal', 'error': 'Host isolation could not be established.'}
+    except Exception:
+        return {'ok': False, 'code': 'github_unavailable', 'error': 'GitHub operation unavailable.'}
+
+
+def register(ctx):
+    opened = _open_host_service()
+    if opened is None:
         return
+    runtime, client, service = opened
 
     def make_handler(action):
         def invoke(args, **kwargs):
-            try:
-                runtime.check()
-                if not isinstance(args, dict) or 'repo' not in args:
-                    raise ActionError('missing repo')
-                repo = canonical_repo(args['repo'])
-                params = {key: value for key, value in args.items() if key != 'repo'}
-                validate_params(action, params)
-                result = service.execute(action, repo, params, recheck_isolation=runtime.check)
-                return json.dumps(result, ensure_ascii=False)
-            except ActionError:
-                return json.dumps({'ok': False, 'code': 'invalid_arguments', 'error': 'Invalid tool arguments.'})
-            except (IsolationError, SecureFileError):
-                return json.dumps({'ok': False, 'code': 'isolation_refusal', 'error': 'Host isolation could not be established.'})
-            except Exception:
-                return json.dumps({'ok': False, 'code': 'github_unavailable', 'error': 'GitHub operation unavailable.'})
+            return json.dumps(_execute_host_operation(runtime, service, action, args), ensure_ascii=False)
         return invoke
 
     def close():
@@ -91,8 +112,8 @@ def tool_schema(action):
     properties = {'repo': {'type': 'string', 'description': 'Exact owner/repository'}}
     for field in sorted(required | optional):
         prop = {'type': 'string'}
-        if field in {'number', 'page', 'per_page', 'line', 'start_line'}:
-            maximum = {'number': 2**31 - 1, 'page': 10000, 'per_page': 100, 'line': 2**31 - 1, 'start_line': 2**31 - 1}[field]
+        if field in {'number', 'comment_id', 'page', 'per_page', 'line', 'start_line'}:
+            maximum = {'number': 2**31 - 1, 'comment_id': 2**63 - 1, 'page': 10000, 'per_page': 100, 'line': 2**31 - 1, 'start_line': 2**31 - 1}[field]
             # Hermes coerces property.type integer/boolean strings before the
             # handler. An equivalent single-branch anyOf preserves the raw
             # JSON value so our strict validator can reject string coercion.
@@ -118,6 +139,12 @@ def tool_schema(action):
     description = action.replace('_', ' ').capitalize() + ' under host repository policy.'
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
+    if action in {'issue_comment_get', 'pr_review_comment_get'}:
+        description += ' Read one source comment by ID with body, actor and parent metadata only. Requires explicit policy allowance.'
+    if action in {'issue_comment_reaction', 'pr_review_comment_reaction'}:
+        description += ' Add only an eyes reaction to one comment ID. Requires explicit policy allowance; never retries uncertain writes.'
+    if action == 'pr_update_body':
+        description += ' Replace only the body of an existing PR, including an empty body. Requires explicit policy allowance; concurrent edits are not protected.'
     if action == 'issue_labels_add':
         description += ' Add existing repository labels to an issue; preserve unrelated labels. Requires explicit policy allowance.'
     if action == 'issue_label_remove':

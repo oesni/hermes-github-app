@@ -159,3 +159,14 @@ class LabelConfigTests(unittest.TestCase):
             with self.assertRaises(PolicyError):parse_config(BASE).policy.authorize('acme/repo',action)
         for action in ('pr_merge','issue_create'):
             with self.assertRaises(PolicyError):config.policy.authorize('acme/support',action)
+
+
+class CommentOperationConfigTests(unittest.TestCase):
+    def test_explicit_operation_grants_and_unchanged_versions(self):
+        config=parse_config(BASE.replace('mode: all', 'mode: allowlist\n    allow: [acme/demo]') + '  allow_actions: [pr_update_body, issue_comment_get, pr_review_comment_get, issue_comment_reaction, pr_review_comment_reaction]\n  deny_actions: [pr_merge]\n')
+        self.assertEqual(config.version,1)
+        for action in ('pr_update_body','issue_comment_get','pr_review_comment_get','issue_comment_reaction','pr_review_comment_reaction'):
+            self.assertEqual(config.policy.authorize('Acme/Demo',action),'acme/demo')
+            with self.assertRaises(PolicyError):config.policy.authorize('other/demo',action)
+            with self.assertRaises(PolicyError):parse_config(BASE).policy.authorize('acme/demo',action)
+        with self.assertRaises(PolicyError):config.policy.authorize('acme/demo','pr_merge')

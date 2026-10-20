@@ -37,6 +37,8 @@ ACTIONS = {
     "issue_comments_list": ActionSpec("issues", "read"),
     "issue_create": ActionSpec("issues", "write"),
     "issue_comment": ActionSpec("issues", "write"),
+    "issue_comment_get": ActionSpec("issues", "read"),
+    "issue_comment_reaction": ActionSpec("issues", "write"),
     "issue_labels_add": ActionSpec("issues", "write"),
     "issue_label_remove": ActionSpec("issues", "write"),
     "pr_list": ActionSpec("pull_requests", "read"),
@@ -44,7 +46,10 @@ ACTIONS = {
     "pr_comments_list": ActionSpec("pull_requests", "read"),
     "pr_create": ActionSpec("pull_requests", "write", (("contents", "read"),)),
     "pr_comment": ActionSpec("pull_requests", "write"),
+    "pr_update_body": ActionSpec("pull_requests", "write"),
     "pr_review_comment": ActionSpec("pull_requests", "write"),
+    "pr_review_comment_get": ActionSpec("pull_requests", "read"),
+    "pr_review_comment_reaction": ActionSpec("pull_requests", "write"),
     "branch_create": ActionSpec("contents", "write"),
     "pr_merge": ActionSpec("contents", "write", (("pull_requests", "read"),)),
 }
@@ -114,6 +119,8 @@ _SCHEMAS = {
     "issue_comments_list": ({"number"}, {"page", "per_page"}),
     "issue_create": ({"title"}, {"body"}),
     "issue_comment": ({"number", "body"}, set()),
+    "issue_comment_get": ({"comment_id"}, set()),
+    "issue_comment_reaction": ({"comment_id"}, set()),
     "issue_labels_add": ({"number", "labels"}, set()),
     "issue_label_remove": ({"number", "label"}, set()),
     "pr_list": (set(), {"state", "page", "per_page"}),
@@ -121,8 +128,11 @@ _SCHEMAS = {
     "pr_comments_list": ({"number"}, {"page", "per_page"}),
     "pr_create": ({"title", "head", "base"}, {"body", "draft"}),
     "pr_comment": ({"number", "body"}, set()),
+    "pr_update_body": ({"number", "body"}, set()),
     "branch_create": ({"branch"}, {"source_branch", "expected_source_sha", "source_commit_sha"}),
     "pr_review_comment": ({"number", "body", "commit_id", "path", "line", "side"}, {"start_line", "start_side"}),
+    "pr_review_comment_get": ({"comment_id"}, set()),
+    "pr_review_comment_reaction": ({"comment_id"}, set()),
     "pr_merge": ({"number", "expected_head_sha", "merge_method"}, set()),
 }
 
@@ -144,6 +154,8 @@ def validate_params(action, params):
     result = dict(params)
     if "number" in result:
         result["number"] = _integer(result["number"], "number")
+    if "comment_id" in result:
+        result["comment_id"] = _integer(result["comment_id"], "comment_id", 2**63 - 1)
     if action.endswith("_list"):
         result["page"] = _integer(result.get("page", 1), "page", 10000)
         result["per_page"] = _integer(result.get("per_page", 30), "per_page", 100)
@@ -172,6 +184,8 @@ def validate_params(action, params):
         result["body"] = _text(result.get("body", ""), "body", blank=True, controls=True)
     if action in {"issue_comment", "pr_comment", "pr_review_comment"}:
         result["body"] = _text(result["body"], "body", controls=True)
+    if action == "pr_update_body":
+        result["body"] = _text(result["body"], "body", blank=True, controls=True)
     if action == "pr_review_comment":
         result["commit_id"] = valid_sha(result["commit_id"], "commit_id")
         path = _text(result["path"], "path", maximum=4096)
@@ -215,6 +229,12 @@ def build_request(action: str, repo: str, params: dict) -> Request:
     repo = canonical_repo(repo)
     p = validate_params(action, params)
     prefix = f"/repos/{repo}"
+    if action in {"issue_comment_get", "pr_review_comment_get", "issue_comment_reaction", "pr_review_comment_reaction"}:
+        resource = "issues" if action.startswith("issue_") else "pulls"
+        path = prefix + f"/{resource}/comments/{p['comment_id']}"
+        if action.endswith("_get"):
+            return Request("GET", path, {}, None)
+        return Request("POST", path + "/reactions", {}, {"content": "eyes"})
     if action == "issue_labels_add":
         return Request("POST", prefix + f"/issues/{p['number']}/labels", {}, {"labels": p["labels"]})
     if action == "issue_label_remove":
@@ -225,6 +245,8 @@ def build_request(action: str, repo: str, params: dict) -> Request:
         return Request("GET", prefix + "/contents" + ("/" + quote(p["path"], safe="/") if p["path"] else ""), {"ref": p["ref"]} if "ref" in p else {}, None)
     if action == "branch_create":
         return Request("POST", prefix + "/git/refs", {}, {"ref": "refs/heads/" + p["branch"], "sha": p.get("source_commit_sha", p.get("expected_source_sha"))})
+    if action == "pr_update_body":
+        return Request("PATCH", prefix + f"/pulls/{p['number']}", {}, {"body": p["body"]})
     if action == "pr_merge":
         return Request("PUT", prefix + f"/pulls/{p['number']}/merge", {}, {"sha": p["expected_head_sha"], "merge_method": p["merge_method"]})
     if action == "pr_review_comment":

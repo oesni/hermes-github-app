@@ -6,6 +6,9 @@ SHA = "a" * 40
 FIXTURES = {"repo_get": {}, "contents_read": {"path": "README.md"}, "issue_list": {}, "issue_get": {"number": 1}, "issue_comments_list": {"number": 1}, "issue_create": {"title": "Report"}, "issue_comment": {"number": 1, "body": "Hello"}, "pr_list": {}, "pr_get": {"number": 2}, "pr_comments_list": {"number": 2}, "pr_create": {"title": "Change", "head": "feature/a", "base": "main"}, "pr_comment": {"number": 2, "body": "Review"}, "branch_create": {"branch": "new", "source_commit_sha": SHA}, "pr_merge": {"number": 1, "expected_head_sha": SHA, "merge_method": "squash"}}
 
 
+FIXTURES["pr_update_body"] = {"number": 2, "body": "Updated"}
+for action in ("issue_comment_get", "issue_comment_reaction", "pr_review_comment_get", "pr_review_comment_reaction"):
+    FIXTURES[action] = {"comment_id": 3}
 FIXTURES["issue_labels_add"] = {"number": 1, "labels": ["bug"]}
 FIXTURES["issue_label_remove"] = {"number": 1, "label": "bug"}
 FIXTURES["pr_review_comment"] = {"number": 2, "body": "Review", "commit_id": SHA, "path": "src/main.py", "line": 10, "side": "RIGHT"}
@@ -17,7 +20,7 @@ class ActionsTests(unittest.TestCase):
         for action, params in FIXTURES.items():
             r = build_request(action, "Acme/Repo", params)
             self.assertTrue(r.path.startswith("/repos/acme/repo"))
-            self.assertIn(r.method, {"GET", "POST", "PUT", "DELETE"})
+            self.assertIn(r.method, {"GET", "POST", "PUT", "DELETE", "PATCH"})
             for override in ["url", "headers", "method", "token", "permissions", "installation_id", "approved", "force"]:
                 with self.subTest(action=action, override=override), self.assertRaises(ActionError):
                     build_request(action, "acme/repo", dict(params, **{override: "override"}))
@@ -114,6 +117,11 @@ class ActionsTests(unittest.TestCase):
             "pr_create": ("POST", "/repos/acme/repo/pulls"),
             "pr_comment": ("POST", "/repos/acme/repo/issues/2/comments"),
             "branch_create": ("POST", "/repos/acme/repo/git/refs"),
+            "pr_update_body": ("PATCH", "/repos/acme/repo/pulls/2"),
+            "issue_comment_get": ("GET", "/repos/acme/repo/issues/comments/3"),
+            "issue_comment_reaction": ("POST", "/repos/acme/repo/issues/comments/3/reactions"),
+            "pr_review_comment_get": ("GET", "/repos/acme/repo/pulls/comments/3"),
+            "pr_review_comment_reaction": ("POST", "/repos/acme/repo/pulls/comments/3/reactions"),
             "issue_labels_add": ("POST", "/repos/acme/repo/issues/1/labels"),
             "issue_label_remove": ("DELETE", "/repos/acme/repo/issues/1/labels/bug"),
             "pr_review_comment": ("POST", "/repos/acme/repo/pulls/2/comments"),
@@ -173,3 +181,17 @@ class LabelActionTests(unittest.TestCase):
         for number in (True, '1', 0, -1, 2**31):
             with self.assertRaises(ActionError):
                 validate_params('issue_label_remove', {'number':number,'label':'bug'})
+
+
+class PrBodyActionTests(unittest.TestCase):
+    def test_closed_body_only_schema_and_bounds(self):
+        self.assertEqual(ACTIONS['pr_update_body'].permissions, {'pull_requests':'write'})
+        for body in ('',' \t\n','text','😀'*65536):
+            request=build_request('pr_update_body','Acme/Repo',{'number':1,'body':body})
+            self.assertEqual((request.method,request.path),('PATCH','/repos/acme/repo/pulls/1'))
+            self.assertEqual(request.body,{'body':body})
+        for change in ({'body':None},{'body':False},{'body':1},{'body':'x'*65537},
+                       {'body':'x\x00'},{'body':'\ud800'},{'title':'x'},{'state':'closed'},
+                       {'base':'main'},{'maintainer_can_modify':True},{'number':True},{'number':'1'}):
+            with self.subTest(change=repr(change)), self.assertRaises(ActionError):
+                validate_params('pr_update_body', {'number':1,'body':'edited',**change})
