@@ -129,3 +129,25 @@ def test_inline_malicious_args_never_reach_auth():
         result=GitHubService(p,client).execute('pr_review_comment','acme/demo',{**valid,**overrides},recheck_isolation=lambda:None)
         assert result['code']=='invalid_arguments',overrides
     client.session.assert_not_called()
+
+
+def test_label_grants_denials_and_invalid_arguments_before_auth():
+    from hermes_github_app.policy import Policy
+    base={'repositories':{'mode':'all','exclude':['acme/private']},'default_access':'write'}
+    for action,params in [('issue_labels_add',{'number':1,'labels':['bug']}), ('issue_label_remove',{'number':1,'label':'bug'})]:
+        cases=[base,dict(base,allow_actions=[action],deny_actions=[action]),
+               dict(base,repository_rules={'acme/demo':{'allow_actions':[action]}},deny_actions=[action])]
+        for cfg in cases:
+            client=Mock()
+            result=GitHubService(Policy.from_dict(cfg),client).execute(action,'acme/demo',params,recheck_isolation=lambda:None)
+            assert result['code']=='policy_denied'
+            client.session.assert_not_called()
+        p=Policy.from_dict(dict(base,repository_rules={'acme/demo':{'access':'read','allow_actions':[action]}}))
+        client=Mock();client.session.return_value.repo='acme/demo';client.session.return_value.execute.return_value={}
+        assert GitHubService(p,client).execute(action,'acme/demo',params,recheck_isolation=lambda:None)['ok']
+        client.session.assert_called_once_with('acme/demo',{'issues':'write'})
+        client.reset_mock()
+        for override in [{'number':True},{'number':'1'},{'url':'https://evil.invalid'}, {'labels':[]} if action.endswith('_add') else {'label':'..'}]:
+            result=GitHubService(p,client).execute(action,'acme/demo',{**params,**override},recheck_isolation=lambda:None)
+            assert result['code']=='invalid_arguments'
+        client.session.assert_not_called()

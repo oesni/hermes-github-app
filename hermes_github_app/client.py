@@ -312,7 +312,36 @@ class Session:
         except BaseException:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 
+    def issue_labels(self, action, params, request):
+        target = self.target(params['number'], False)
+        if type(target.get('number')) is not int:
+            raise ClientError('GitHub target mismatch.', 'target_changed')
+        if action == 'issue_labels_add':
+            for name in params['labels']:
+                label = self.get('/labels/' + quote(name, safe=''), missing=True)
+                if (not isinstance(label, dict) or type(label.get('id')) is not int
+                        or label['id'] <= 0 or not isinstance(label.get('name'), str)
+                        or label['name'].casefold() != name.casefold()):
+                    raise ClientError('Repository label does not exist or cannot be verified.', 'invalid_arguments')
+        response = self.request(request.method, request.path.removeprefix(self.prefix),
+                                body=request.body, mutation=True)
+        try:
+            if not isinstance(response.data, list):
+                raise ValueError()
+            labels = []
+            for label in response.data:
+                if not isinstance(label, dict) or type(label.get('id')) is not int or label['id'] <= 0:
+                    raise ValueError()
+                if not isinstance(label.get('name'), str) or not label['name']:
+                    raise ValueError()
+                labels.append({'id': label['id'], 'name': label['name']})
+            return self.safe({'number': params['number'], 'labels': labels})
+        except BaseException:
+            raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
+
     def execute(self,action,params,request):
+        if action in {'issue_labels_add', 'issue_label_remove'}:
+            return self.issue_labels(action, params, request)
         if action=='pr_review_comment':return self.review_comment(params,request)
         if action=='contents_read':result=self.contents(params)
         elif action=='branch_create':result=self.create_branch(params)

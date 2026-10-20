@@ -146,3 +146,16 @@ class InlineCommentConfigTests(unittest.TestCase):
         for repo, action in [("acme/other", "pr_review_comment"), ("acme/demo", "pr_merge"), ("acme/demo", "issue_create")]:
             with self.subTest(repo=repo, action=action), self.assertRaises(PolicyError):
                 config.policy.authorize(repo, action)
+
+
+class LabelConfigTests(unittest.TestCase):
+    def test_explicit_label_example_and_frozen_profiles(self):
+        config=parse_config((Path(__file__).resolve().parents[1]/'examples/issue-labels.yaml').read_bytes())
+        self.assertEqual(config.version,1)
+        for action in ('issue_labels_add','issue_label_remove'):
+            self.assertEqual(config.policy.authorize('Acme/Support',action),'acme/support')
+            for repo in ('acme/other','other/support'):
+                with self.assertRaises(PolicyError):config.policy.authorize(repo,action)
+            with self.assertRaises(PolicyError):parse_config(BASE).policy.authorize('acme/repo',action)
+        for action in ('pr_merge','issue_create'):
+            with self.assertRaises(PolicyError):config.policy.authorize('acme/support',action)

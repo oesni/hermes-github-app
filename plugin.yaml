@@ -11,6 +11,8 @@ provides_tools:
   - github_issue_comments_list
   - github_issue_create
   - github_issue_comment
+  - github_issue_labels_add
+  - github_issue_label_remove
   - github_pr_list
   - github_pr_get
   - github_pr_comments_list

@@ -1,0 +1,15 @@
+version: 1
+auth:
+  app_id: 12345
+  installation_id: 67890
+  private_key_path: /secure/github-app/private-key.pem
+policy:
+  repositories:
+    mode: allowlist
+    allow: [acme/support]
+    exclude: []
+  default_access: read
+  deny_actions: [pr_merge]
+  repository_rules:
+    acme/support:
+      allow_actions: [issue_labels_add, issue_label_remove]
