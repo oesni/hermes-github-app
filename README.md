@@ -32,15 +32,15 @@ For each selected repository:
   - (global deny_actions + repo deny_actions)
 ```
 
-`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Configuration version 1 recognizes twenty-two actions, including `pr_review_comment`, which requires an explicit `allow_actions` entry. The read and write profile expansions remain unchanged; upgrading does not grant inline comments, label mutations, PR body updates, source comment reads or reactions automatically.
+`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Configuration version 1 recognizes twenty-three actions, including `pr_review_comment`, which requires an explicit `allow_actions` entry. The read and write profile expansions remain unchanged; upgrading does not grant inline comments, label mutations, PR body updates, source comment reads, reactions or Git publication automatically.
 
 | Profile | Configuration actions (public tools add `github_`) |
 | --- | --- |
 | read | `repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `pr_list`, `pr_get`, `pr_comments_list` |
 | write | All read actions plus `issue_create`, `issue_comment`, `pr_create`, `pr_comment`, `branch_create` |
-| explicit allowance only | `pr_merge`, `pr_review_comment`, `issue_labels_add`, `issue_label_remove`, `pr_update_body`, `issue_comment_get`, `pr_review_comment_get`, `issue_comment_reaction`, `pr_review_comment_reaction` |
+| explicit allowance only | `pr_merge`, `pr_review_comment`, `issue_labels_add`, `issue_label_remove`, `pr_update_body`, `issue_comment_get`, `pr_review_comment_get`, `issue_comment_reaction`, `pr_review_comment_reaction`, `git_push` |
 
-Each operation is a separate native tool named `github_<action>`; configuration actions remain unprefixed. For example, action `issue_comment` is exposed as `github_issue_comment`, and `pr_merge` as `github_pr_merge`. Arguments are flat: `github_issue_comment` takes `{repo, number, body}` and `github_pr_merge` takes `{repo, number, expected_head_sha, merge_method}`. Prefixed action names in configuration are rejected. There is no generic action dispatcher or legacy operation alias. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, file write, git push/clone, review submission or diff-reading API, general PR edits beyond the explicit body action, PR deletion, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. `contents_read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
+Each operation is a separate native tool named `github_<action>`; configuration actions remain unprefixed. For example, action `issue_comment` is exposed as `github_issue_comment`, and `pr_merge` as `github_pr_merge`. Arguments are flat: `github_issue_comment` takes `{repo, number, body}` and `github_pr_merge` takes `{repo, number, expected_head_sha, merge_method}`. Prefixed action names in configuration are rejected. There is no generic action dispatcher or legacy operation alias. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, arbitrary file write, git clone, review submission or diff-reading API, general PR edits beyond the explicit body action, PR deletion, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. The separately allowed `github_git_push` publishes existing local commits to one branch; see [commit publication](docs/spec/commit-push.md). `contents_read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
 
 ## Inline PR comments
 
@@ -54,9 +54,56 @@ All seven fields are required. `line` is a JSON integer from 1 through 214748364
 
 The host confirms that the target is an open PR in the selected repository (fork-head PRs are permitted) and that its head matches `commit_id` before sending one request with `pull_requests:write` permission. GitHub validates that the requested path and line form a valid diff location. The head can change after the host check; the submitted comment remains bound to the supplied commit, so this is not an atomic current-head guarantee. A successfully created comment may return `uncertain_outcome` if a concurrent head advance changes the returned commit or line fields after the POST; it is never retried automatically. Success returns only available `id`, `html_url`, `pull_request_url`, `commit_id`, `path`, `line`, `side`, `start_line`, `start_side`, and `created_at` metadata, excluding raw diff content, body text, and user objects. Replies, batched reviews, file-level comments, review-comment editing/deletion, and diff reads are outside this creation tool. Read one inline review comment by ID with the separately allowed `github_pr_review_comment_get` tool. See the [inline-comment contract](docs/spec/pr-inline-review-comments.md).
 
+## Publish local commits
+
+Explicitly allow `git_push` globally or for a selected repository; `access: write` alone does not grant it. For example, add `allow_actions: [git_push]` to the existing `policy.repository_rules.acme/demo` entry. Existing exclusions and `deny_actions` still win. The `git_push` grant permits creating a branch as well as updating it; a separate `branch_create` denial does not restrict that capability. It also authorizes the fixed terminal file-read command for `bundle_path` and host Git processes. No version change is needed.
+
+Commit in the agent's checkout, then create a bundle naming the destination branch. For a new branch:
+
+```sh
+git switch -c feat/parser-fix
+git add src/parser.py
+git commit -m "fix: handle empty parser input"
+git bundle create /tmp/parser-fix.bundle refs/heads/feat/parser-fix
+git rev-parse refs/heads/feat/parser-fix
+```
+
+Call `github_git_push` with the actual SHA printed by the last command:
+
+```json
+{"repo":"acme/demo","branch":"feat/parser-fix","commit_sha":"0123456789abcdef0123456789abcdef01234567","expected_head_sha":null,"bundle_path":"/tmp/parser-fix.bundle"}
+```
+
+The path is read through the **active terminal backend**, including Docker. With a local backend, it is a host path readable with that backend's account permissions. The fixed reader uses public tool dispatch, which may run even when the calling profile does not enable the terminal toolset; it does not imply that model-level tool checks or hooks are applied to the nested call. The tool reads and verifies chunks without making the model copy base64. It requires an active terminal task context, Python 3 in that backend and sufficient terminal output limits. Calls without this context can instead supply `bundle_base64`; supplying both inputs is an error. Publication requires a Linux host with Git 2.28 or later available in a standard system executable directory; other host platforms are unsupported. No GitHub credentials are installed in the sandbox.
+
+For subsequent commits, make an incremental bundle excluding the exact known remote branch head:
+
+```sh
+expected_head=$(git rev-parse refs/remotes/origin/feat/parser-fix)
+git bundle create /tmp/parser-fix.bundle refs/heads/feat/parser-fix "^$expected_head"
+```
+
+Pass that exact value as `expected_head_sha`, the new local head as `commit_sha`, and the same bundle path. A stale tracking ref causes refusal if the actual remote head differs; it never authorizes overwriting concurrent work. Updates must be fast-forward. A successful plugin push does not update the local checkout's remote-tracking refs, so use the last confirmed remote head or refresh it through an independently authorized fetch before preparing the next bundle. A new branch requires a self-contained bundle. To avoid transmitting its old history, first create a branch at an existing verified base with `github_branch_create` (which needs its own policy permission), then publish an incremental bundle. These two operations are not atomic. The fetched base snapshot still counts toward the operation limits, so this is not a workaround for an oversized snapshot. Incremental bundles with multiple prerequisites are refused; a no-op update requires a self-contained bundle.
+
+A host plugin with a public Hermes context can also dispatch the native tool programmatically, forwarding its active task context:
+
+```python
+result = ctx.dispatch_tool(
+    "github_git_push",
+    {"repo": "acme/demo", "branch": "feat/parser-fix",
+     "commit_sha": local_head_sha, "expected_head_sha": known_remote_head_sha,
+     "bundle_path": "/tmp/parser-fix.bundle"},
+    **active_task_context,
+)
+```
+
+This example runs in the host plugin, not in arbitrary sandbox Python. An integration that supplies base64 directly replaces `bundle_path` with `bundle_base64` and can build the string programmatically without printing it into a model response.
+
+Publication preserves commit IDs and history, changes exactly one branch, and never force-rewrites, deletes, merges or retries an uncertain result. The decoded bundle limit is 32 MiB and the bundle header limit is 4096 bytes. The entire imported repository, including a fetched base snapshot, must fit 100000 objects and 256 MiB of decoded object data. Git child processes also have a 64 MiB per-file limit (including a fetched pack), a 512 MiB address-space limit, and CPU/wall deadlines. Even a small update can exceed these limits. Git LFS object upload is not supported. GitHub protections and Contents write permission remain necessary, and workflow-file changes may need permissions this operation does not request. See the [complete publication contract](docs/spec/commit-push.md).
+
 ## Host boundary
 
-The plugin registers twenty-two tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Enable the `github_app` toolset in Hermes to expose them.
+The plugin registers twenty-three tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Enable the `github_app` toolset in Hermes to expose them.
 
 ```yaml
 toolsets: [github_app]
@@ -73,6 +120,8 @@ Accepted modes are Hermes-owned `0400`/`0600`, or root-owned `0440`/`0640` reada
 All bundled examples deny `pr_merge` globally. To enable it for selected repositories, configure an explicit allowance without a conflicting global or repository denial. Merge uses the same host-enforced policy as other actions; there is no separate approval adapter or platform-specific configuration.
 
 A merge requires the PR number, expected head SHA, and explicit merge method. The host verifies the target and immediately rechecks protected-file metadata, policy, base/head branches, and head SHA before one dispatch. GitHub atomically checks the head SHA; its API cannot atomically bind the base branch, so retargeting after the final check remains possible. An uncertain mutation is never automatically retried.
+
+`git_push` can publish to any branch, including the default branch. Denying `pr_merge` does not prohibit direct pushes; use GitHub branch protections to require PRs. The plugin has no branch allowlist.
 
 GitHub enforces repository protections. **Administrators must keep the App free of applicable bypass grants.** The plugin does not independently audit protection/ruleset bypass status and cannot guarantee protection if that prerequisite is violated. It neither requests administrative permissions nor exposes protection configuration. Tokens are scoped to the same installation, target repository, and operation permissions.
 

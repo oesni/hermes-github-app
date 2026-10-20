@@ -187,7 +187,7 @@ plugin.register(ctx)
 assert registry.get_entry("github_repo_get") is not None
 assert registry.get_entry("github_app_action") is None
 from hermes_github_app.actions import ACTIONS
-assert len(ACTIONS) == 22
+assert len(ACTIONS) == 23
 assert all(registry.get_entry("github_" + name) is not None for name in ACTIONS)
 assert all(registry.get_entry(name) is None for name in ACTIONS)
 inline = {"repo": "acme/demo", "number": 1, "body": "Review", "commit_id": "a" * 40,
@@ -248,6 +248,20 @@ before = service.execute.call_count
 hooked = model_tools.handle_function_call("github_repo_get", args, task_id="default", session_id="native-test", tool_call_id="hook-block")
 assert "existing security hook" in hooked
 assert service.execute.call_count == before
+# Exercise the real public nested dispatcher and native task context forwarding.
+import base64, hashlib
+terminal_contexts = []
+def terminal_reader(args, **kwargs):
+    terminal_contexts.append(kwargs)
+    payload = b"test bundle transport"
+    return json.dumps({"exit_code": 0, "output": json.dumps({"identity": [1,2,len(payload),4,5], "offset": 0, "data": base64.b64encode(payload).decode(), "sha256": hashlib.sha256(payload).hexdigest()})})
+registry.register(name="terminal", toolset="terminal", schema={"name":"terminal", "parameters":{"type":"object","properties":{}}}, handler=terminal_reader, override=True)
+path_args = {"repo":"acme/demo", "branch":"feature", "commit_sha":"a"*40, "expected_head_sha":None, "bundle_path":"/sandbox/upload.bundle"}
+published = json.loads(model_tools.handle_function_call("github_git_push", path_args, task_id="native-push-task", session_id="native-push-session", tool_call_id="native-push"))
+assert published["ok"], published
+assert terminal_contexts and terminal_contexts[0]["task_id"] == "native-push-task", terminal_contexts
+assert service.execute.call_args.args[2]["bundle_base64"] == base64.b64encode(b"test bundle transport").decode()
+assert "bundle_path" not in service.execute.call_args.args[2]
 print("Public registration kept strict arguments and an existing security hook")
 '''
     env = {'HOME': os.environ['HOME'], 'PATH': os.environ.get('PATH', ''),
@@ -256,14 +270,14 @@ print("Public registration kept strict arguments and an existing security hook")
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_twenty_two_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
+def test_twenty_three_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
     from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
     monkeypatch.setattr(plugin, 'GitHubClient', Mock())
     ctx = Mock()
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
     assert set(registrations) == {'github_' + action for action in ACTIONS}
-    assert len({id(item['handler']) for item in registrations.values()}) == 22
+    assert len({id(item['handler']) for item in registrations.values()}) == 23
     for action in ACTIONS:
         item = registrations['github_' + action]
         assert item['schema']['name'] == 'github_' + action
