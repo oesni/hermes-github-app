@@ -328,9 +328,10 @@ def test_concurrent_same_tip_is_not_misreported_as_our_publication(transport,rep
 @pytest.mark.skipif(sys.platform.startswith('linux'),reason='Tests actual unsupported host')
 def test_unsupported_host_refuses_before_git_subprocess(repositories,monkeypatch):
     from hermes_github_app import git_push
+    params=arguments(repositories)
     spawn=Mock();monkeypatch.setattr(git_push.subprocess,'Popen',spawn)
     with pytest.raises(ClientError) as error:
-        git_push.publish(session(),arguments(repositories),lambda:None)
+        git_push.publish(session(),params,lambda:None)
     assert error.value.code=='git_unavailable'
     spawn.assert_not_called()
 
