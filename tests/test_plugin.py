@@ -187,7 +187,7 @@ plugin.register(ctx)
 assert registry.get_entry("github_repo_get") is not None
 assert registry.get_entry("github_app_action") is None
 from hermes_github_app.actions import ACTIONS
-assert len(ACTIONS) == 17
+assert len(ACTIONS) == 22
 assert all(registry.get_entry("github_" + name) is not None for name in ACTIONS)
 assert all(registry.get_entry(name) is None for name in ACTIONS)
 inline = {"repo": "acme/demo", "number": 1, "body": "Review", "commit_id": "a" * 40,
@@ -210,6 +210,23 @@ for name, args in [("github_issue_labels_add", {"repo": "acme/demo", "number": 1
     for field, value in (("number", "1"), ("number", True), ("labels", '["bug"]')) if "labels" in args else (("number", "1"), ("number", True)):
         before = service.execute.call_count
         rejected = model_tools.handle_function_call(name, dict(args, **{field: value}), task_id="default", session_id="native-test", tool_call_id="bad-label")
+        assert json.loads(rejected)["code"] == "invalid_arguments", rejected
+        assert service.execute.call_count == before
+new_operations = [("github_pr_update_body", {"repo":"acme/demo","number":1,"body":""})]
+new_operations += [("github_" + name, {"repo":"acme/demo","comment_id":2**53 + 1}) for name in
+                   ("issue_comment_get","issue_comment_reaction","pr_review_comment_get","pr_review_comment_reaction")]
+for name, args in new_operations:
+    accepted = model_tools.handle_function_call(name, args, task_id="default", session_id="native-test", tool_call_id=name)
+    assert json.loads(accepted)["ok"], accepted
+    assert service.execute.call_args.args == (name.removeprefix("github_"), "acme/demo", {key:value for key,value in args.items() if key != "repo"})
+    before = service.execute.call_count
+    rejected = model_tools.handle_function_call(name, dict(args, url="https://evil.invalid"), task_id="default", session_id="native-test", tool_call_id="invalid-new-override")
+    assert json.loads(rejected)["code"] == "invalid_arguments", rejected
+    assert service.execute.call_count == before
+    integer_field = "comment_id" if "comment_id" in args else "number"
+    for value in ("1", True):
+        before = service.execute.call_count
+        rejected = model_tools.handle_function_call(name, dict(args, **{integer_field:value}), task_id="default", session_id="native-test", tool_call_id="invalid-new-int")
         assert json.loads(rejected)["code"] == "invalid_arguments", rejected
         assert service.execute.call_count == before
 blocked.add("execute_code")
@@ -239,14 +256,14 @@ print("Public registration kept strict arguments and an existing security hook")
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_seventeen_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
+def test_twenty_two_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
     from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
     monkeypatch.setattr(plugin, 'GitHubClient', Mock())
     ctx = Mock()
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
     assert set(registrations) == {'github_' + action for action in ACTIONS}
-    assert len({id(item['handler']) for item in registrations.values()}) == 17
+    assert len({id(item['handler']) for item in registrations.values()}) == 22
     for action in ACTIONS:
         item = registrations['github_' + action]
         assert item['schema']['name'] == 'github_' + action
@@ -352,3 +369,28 @@ def test_label_schemas_and_handlers_preserve_strict_types(configuration, monkeyp
         invalid={'labels':'["bug"]'} if action.endswith('_add') else {'label':False}
         assert json.loads(entry['handler']({'repo':'acme/demo',**params,**invalid}))['code']=='invalid_arguments'
         assert before==service.execute.call_count
+
+
+@pytest.mark.parametrize('failure_stage',['isolation','client','service'])
+def test_shared_startup_failure_closes_created_resources_and_sanitizes(configuration,monkeypatch,caplog,failure_stage):
+    from hermes_github_app.isolation import IsolationError
+    boundary=Mock()
+    client=Mock()
+    monkeypatch.setattr(plugin,'HostBoundary',Mock(return_value=boundary))
+    monkeypatch.setattr(plugin,'GitHubClient',Mock(return_value=client))
+    if failure_stage=='isolation':boundary.check.side_effect=IsolationError('private-host-detail')
+    elif failure_stage=='client':plugin.GitHubClient.side_effect=RuntimeError('private-host-detail')
+    else:monkeypatch.setattr(plugin,'GitHubService',Mock(side_effect=RuntimeError('private-host-detail')))
+    assert plugin._open_host_service() is None
+    boundary.close.assert_called_once_with()
+    if failure_stage=='service':client.close.assert_called_once_with()
+    else:client.close.assert_not_called()
+    assert 'private-host-detail' not in caplog.text
+
+
+def test_public_manifest_names_match_catalog():
+    from ruamel.yaml import YAML
+    from hermes_github_app.actions import ACTIONS
+    manifest=YAML(typ='safe').load((Path(__file__).resolve().parents[1]/'plugin.yaml').read_text())
+    assert set(manifest['provides_tools'])=={'github_'+action for action in ACTIONS}
+    assert len(manifest['provides_tools'])==len(ACTIONS)

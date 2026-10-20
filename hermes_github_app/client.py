@@ -23,6 +23,7 @@ class ClientError(Exception):
 class Response:
     data: object
     has_more: bool = False
+    status_code: int = 200
 
 class GitHubClient:
     def __init__(self, app_id, installation_id, private_key_path, *, transport=None):
@@ -76,7 +77,7 @@ class GitHubClient:
                         raise ClientError("GitHub response exceeds the size limit.", "size_limit")
                     payload.extend(chunk)
                 return Response(json.loads(payload) if payload else None,
-                    any(re.search(r';\s*rel="next"', part) for part in response.headers.get("link", "").split(",")))
+                    any(re.search(r';\s*rel="next"', part) for part in response.headers.get("link", "").split(",")), response.status_code)
         except ClientError as exc:
             if mutation and exc.code not in {"github_denied", "uncertain_outcome"}:
                 raise ClientError("GitHub mutation outcome is uncertain.", "uncertain_outcome") from None
@@ -312,6 +313,68 @@ class Session:
         except BaseException:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 
+    @staticmethod
+    def comment_actor(value):
+        if (not isinstance(value, dict) or type(value.get('id')) is not int or value['id'] <= 0
+                or not isinstance(value.get('login'), str) or not value['login']
+                or not isinstance(value.get('type'), str) or not value['type']):
+            raise ClientError('Unverifiable GitHub comment actor.')
+        return {key: value[key] for key in ('id', 'login', 'type')}
+
+    def source_comment(self, action, params, request):
+        result = self.request('GET', request.path.removeprefix(self.prefix)).data
+        if (not isinstance(result, dict) or type(result.get('id')) is not int
+                or result['id'] != params['comment_id'] or not isinstance(result.get('body'), str)):
+            raise ClientError('GitHub comment identity mismatch.', 'target_changed')
+        self.check_repo(result)
+        issue = action == 'issue_comment_get'
+        field, resource = ('issue_url', 'issues') if issue else ('pull_request_url', 'pulls')
+        parent = result.get(field)
+        if not isinstance(parent, str) or not re.fullmatch(
+                re.escape(f'https://api.github.com/repos/{self.repo}/{resource}/') + r'[1-9][0-9]*', parent, re.IGNORECASE):
+            raise ClientError('GitHub comment parent mismatch.', 'target_changed')
+        number = parent.rsplit('/', 1)[1]
+        anchor = f'issuecomment-{params["comment_id"]}' if issue else f'discussion_r{params["comment_id"]}'
+        resources = ('issues', 'pull') if issue else ('pull',)
+        allowed_urls = {f'https://github.com/{self.repo}/{kind}/{number}#{anchor}' for kind in resources}
+        html_url = result.get('html_url')
+        if not isinstance(html_url, str) or html_url.lower() not in allowed_urls:
+            raise ClientError('GitHub comment source URL mismatch.', 'target_changed')
+        return self.safe({'id': result['id'], 'body': result['body'], field: parent,
+                          'html_url': html_url, 'user': self.comment_actor(result.get('user'))})
+
+    def comment_reaction(self, action, params, request):
+        response = self.request('POST', request.path.removeprefix(self.prefix),
+                                body={'content': 'eyes'}, mutation=True)
+        try:
+            result = response.data
+            if (response.status_code not in {200, 201} or not isinstance(result, dict)
+                    or type(result.get('id')) is not int or result['id'] <= 0
+                    or result.get('content') != 'eyes'):
+                raise ValueError()
+            self.check_repo(result)
+            return self.safe({'id': result['id'], 'content': 'eyes',
+                              'user': self.comment_actor(result.get('user')),
+                              'created': response.status_code == 201})
+        except BaseException:
+            raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
+
+    def update_pr_body(self, params, request):
+        target = self.target(params['number'], True)
+        if type(target.get('number')) is not int:
+            raise ClientError('GitHub target mismatch.', 'target_changed')
+        response = self.request('PATCH', f'/pulls/{params["number"]}', body=request.body, mutation=True)
+        try:
+            result = response.data
+            if (not isinstance(result, dict) or type(result.get('number')) is not int
+                    or result['number'] != params['number']):
+                raise ValueError()
+            self.check_repo(result)
+            return self.safe({'number': params['number'],
+                              'html_url': f'https://github.com/{self.repo}/pull/{params["number"]}'})
+        except BaseException:
+            raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
+
     def issue_labels(self, action, params, request):
         target = self.target(params['number'], False)
         if type(target.get('number')) is not int:
@@ -340,6 +403,11 @@ class Session:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 
     def execute(self,action,params,request):
+        if action in {'issue_comment_get', 'pr_review_comment_get'}:
+            return self.source_comment(action, params, request)
+        if action in {'issue_comment_reaction', 'pr_review_comment_reaction'}:
+            return self.comment_reaction(action, params, request)
+        if action == 'pr_update_body':return self.update_pr_body(params, request)
         if action in {'issue_labels_add', 'issue_label_remove'}:
             return self.issue_labels(action, params, request)
         if action=='pr_review_comment':return self.review_comment(params,request)

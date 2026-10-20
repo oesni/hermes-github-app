@@ -151,3 +151,47 @@ def test_label_grants_denials_and_invalid_arguments_before_auth():
             result=GitHubService(p,client).execute(action,'acme/demo',{**params,**override},recheck_isolation=lambda:None)
             assert result['code']=='invalid_arguments'
         client.session.assert_not_called()
+
+
+def test_pr_body_explicit_grants_and_denials_before_auth():
+    from hermes_github_app.policy import Policy
+    base={'repositories':{'mode':'all','exclude':['acme/private']},'default_access':'write'}
+    params={'number':1,'body':'updated'}
+    for cfg in (base,dict(base,allow_actions=['pr_update_body'],deny_actions=['pr_update_body']),
+                dict(base,deny_actions=['pr_update_body'],repository_rules={'acme/demo':{'allow_actions':['pr_update_body']}})):
+        client=Mock()
+        result=GitHubService(Policy.from_dict(cfg),client).execute('pr_update_body','acme/demo',params,recheck_isolation=lambda:None)
+        assert result['code']=='policy_denied'
+        client.session.assert_not_called()
+    p=Policy.from_dict(dict(base,repository_rules={'acme/demo':{'access':'read','allow_actions':['pr_update_body']}}))
+    client=Mock();client.session.return_value.repo='acme/demo';client.session.return_value.execute.return_value={}
+    assert GitHubService(p,client).execute('pr_update_body','acme/demo',params,recheck_isolation=lambda:None)['ok']
+    client.session.assert_called_once_with('acme/demo',{'pull_requests':'write'})
+    client.reset_mock()
+    for override in ({'number':True},{'number':'1'},{'body':None},{'state':'closed'},{'title':'rename'}, {'token':'secret'}):
+        result=GitHubService(p,client).execute('pr_update_body','acme/demo',{**params,**override},recheck_isolation=lambda:None)
+        assert result['code']=='invalid_arguments'
+    client.session.assert_not_called()
+
+
+def test_source_comment_and_eyes_actions_require_explicit_allow_before_auth():
+    from hermes_github_app.policy import Policy
+    actions={'issue_comment_get':{'issues':'read'},'pr_review_comment_get':{'pull_requests':'read'},
+             'issue_comment_reaction':{'issues':'write'},'pr_review_comment_reaction':{'pull_requests':'write'}}
+    base={'repositories':{'mode':'all','exclude':['acme/private']},'default_access':'write'}
+    for action,permissions in actions.items():
+        for cfg,repo in [(base,'acme/demo'),(dict(base,allow_actions=[action],deny_actions=[action]),'acme/demo'),
+                         (dict(base,allow_actions=[action]),'acme/private')]:
+            client=Mock()
+            result=GitHubService(Policy.from_dict(cfg),client).execute(action,repo,{'comment_id':3},recheck_isolation=lambda:None)
+            assert result['code']=='policy_denied'
+            client.session.assert_not_called()
+        p=Policy.from_dict(dict(base,repository_rules={'acme/demo':{'access':'read','allow_actions':[action]}}))
+        client=Mock();client.session.return_value.repo='acme/demo';client.session.return_value.execute.return_value={}
+        assert GitHubService(p,client).execute(action,'Acme/Demo',{'comment_id':3},recheck_isolation=lambda:None)['ok']
+        client.session.assert_called_once_with('acme/demo',permissions)
+        client.reset_mock()
+        for params in ({'comment_id':True},{'comment_id':'3'},{'comment_id':3,'content':'eyes'},{'comment_id':3,'token':'secret'}):
+            result=GitHubService(p,client).execute(action,'acme/demo',params,recheck_isolation=lambda:None)
+            assert result['code']=='invalid_arguments'
+        client.session.assert_not_called()

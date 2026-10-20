@@ -462,3 +462,40 @@ def test_unrelated_labels_outside_input_rules_do_not_invalidate_success(key_file
         (method,path):[{'id':9,'name':name,'description':'hidden'}]})
     assert api.run(action,params)=={'number':1,'labels':[{'id':9,'name':name}]}
     assert sum(r.method==method and r.url.path.endswith(path) for r in api.calls)==1
+
+
+@pytest.mark.parametrize('state',['open','closed'])
+@pytest.mark.parametrize('body',['','한글\n\t**updated**','x'*65536])
+def test_pr_update_body_only_changes_body_with_minimal_permission(key_file,state,body):
+    target=merge_pr(state=state)
+    api=API(key_file,{'/pulls/1':target,('PATCH','/pulls/1'):{**target,'body':body,'user':{'login':'hidden'},'arbitrary':'hidden'}})
+    result=api.run('pr_update_body',{'number':1,'body':body})
+    assert result=={'number':1,'html_url':'https://github.com/acme/demo/pull/1'}
+    assert json.loads(api.calls[0].content)['permissions']=={'pull_requests':'write'}
+    assert api.calls[-1].method=='PATCH' and json.loads(api.calls[-1].content)=={'body':body}
+    assert sum(r.method=='PATCH' for r in api.calls)==1
+
+
+@pytest.mark.parametrize('target',[httpx.Response(404),{'number':2},{'number':True},
+    {'number':1,'base':{'repo':{'full_name':'other/demo'}}}])
+def test_pr_update_body_wrong_target_never_patches(key_file,target):
+    api=API(key_file,{'/pulls/1':target})
+    with pytest.raises(ClientError):api.run('pr_update_body',{'number':1,'body':'edited'})
+    assert not any(r.method=='PATCH' for r in api.calls)
+
+
+@pytest.mark.parametrize('failure,code',[
+    (httpx.Response(403,text='secret-token'),'github_denied'),
+    (httpx.Response(422),'github_denied'),
+    (httpx.Response(503),'uncertain_outcome'),
+    (httpx.ReadTimeout('secret-token'),'uncertain_outcome'),
+    (httpx.Response(200,json=[]),'uncertain_outcome'),
+    (httpx.Response(200,json={'number':True}),'uncertain_outcome'),
+    (httpx.Response(200,json={'number':2}),'uncertain_outcome'),
+    (httpx.Response(200,json={'number':1,'base':{'repo':{'full_name':'other/demo'}}}),'uncertain_outcome'),
+])
+def test_pr_update_body_error_or_unverifiable_success_is_not_retried(key_file,failure,code):
+    api=API(key_file,{'/pulls/1':merge_pr(),('PATCH','/pulls/1'):failure})
+    with pytest.raises(ClientError) as caught:api.run('pr_update_body',{'number':1,'body':'edited'})
+    assert caught.value.code==code and 'secret-token' not in str(caught.value)
+    assert sum(r.method=='PATCH' for r in api.calls)==1

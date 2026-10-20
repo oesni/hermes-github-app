@@ -3,10 +3,10 @@
 ## Contract and implementation
 
 - Model-facing native tool names and schema names use `github_` followed by the action (for example, `github_pr_merge` and `github_issue_comment`). Configuration actions and internal policy/catalog identifiers remain unprefixed (`pr_merge`, `issue_comment`). Keep toolset `github_app`. Reject prefixed or legacy dotted configuration actions; expose no unprefixed tool aliases or generic dispatcher tool.
-- Read `docs/spec/github-app-configuration.md` before changing behavior. It defines the version-1 configuration and runtime contract. This unreleased implementation recognizes seventeen actions, including `pr_review_comment`, `issue_labels_add`, and `issue_label_remove` through explicit action allowances. The read profile retains eight actions and write retains thirteen; neither includes inline review comments, label mutations, or merge.
+- Read `docs/spec/github-app-configuration.md` before changing behavior. It defines the version-1 configuration and runtime contract. The closed catalog contains twenty-two actions. Inline comments, label actions, PR body update, individual comment reads and eyes reactions require explicit action allowances. The read profile retains eight actions and write retains thirteen; neither includes inline review comments, label mutations, PR body update, source comment reads, reactions, or merge. Keep package version `0.1.0` and configuration version `1`.
 - Keep GitHub App keys, JWTs, installation tokens, configuration, and authorization decisions on the trusted host. Never expose credentials through agent arguments, results, errors, logs, forwarded environments, or sandbox mounts.
 - Enforce repository selection, exclusions, action policy, argument validation, canonical target checks, and operation prerequisites on the host before mutation. Explicit denials win over grants. Merge uses the same explicit action policy and GitHub protection checks; do not add an unsolicited approval adapter or platform-specific authorization workflow.
-- Register GitHub tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Do not pin a Hermes source revision, and do not restrict the host's other tools, hooks, delegation, or Docker container reuse. Keep credentials and repository policy inside this plugin, and recheck the protected configuration and key files before every operation.
+- Register GitHub tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Do not require a particular Hermes source revision. Keep credentials and repository policy inside this plugin, and recheck the protected configuration and key files before every operation.
 - Preserve the complete startup snapshot and per-call isolation rechecks. Do not add implicit hot reload or credential fallback.
 
 ## Development and verification
@@ -22,3 +22,10 @@
 - Publish feature changes through reviewable pull requests. Never push directly to `main`.
 - Never merge, enable auto-merge, or enqueue a merge without the user's explicit instruction authorizing that specific PR. Implementation, review, or publication requests do not authorize a merge.
 - When a particular PR merge is explicitly authorized, use squash merge only. Do not bypass repository protections or rewrite published history.
+
+
+## Public repository scope
+
+- Include only reusable GitHub App plugin functionality and its public API documentation and tests.
+- Never commit personal deployment names, paths, topology, policies, adapters, reports, conversation history, or operational records. Keep private operations outside this repository.
+- Do not copy a private integration into this repository by merely replacing its identifiers with generic names.
