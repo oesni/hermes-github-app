@@ -143,6 +143,12 @@ def tool_schema(action):
         elif field == 'labels':
             prop = {'anyOf': [{'type': 'array', 'minItems': 1, 'maxItems': 100, 'uniqueItems': True,
                               'items': {'type': 'string', 'minLength': 1, 'maxLength': 50}}]}
+        elif field == 'name' and action == 'label_create':
+            prop.update(minLength=1, maxLength=50)
+        elif field == 'color' and action == 'label_create':
+            prop.update(pattern='^[a-fA-F0-9]{6}$', description='Six hexadecimal digits without #.')
+        elif field == 'description' and action == 'label_create':
+            prop.update(maxLength=100)
         elif field == 'label':
             prop.update(minLength=1, maxLength=50)
         elif field == 'draft':
@@ -169,6 +175,8 @@ def tool_schema(action):
         description += ' Add only an eyes reaction to one comment ID. Requires explicit policy allowance; never retries uncertain writes.'
     if action == 'pr_update_body':
         description += ' Replace only the body of an existing PR, including an empty body. Requires explicit policy allowance; concurrent edits are not protected.'
+    if action == 'label_create':
+        description += ' Create a repository label with name, six-digit color and optional description. Requires explicit policy allowance. Existing names are rejected; never updates labels or retries uncertain writes.'
     if action == 'issue_labels_add':
         description += ' Add existing repository labels to an issue; preserve unrelated labels. Requires explicit policy allowance.'
     if action == 'issue_label_remove':

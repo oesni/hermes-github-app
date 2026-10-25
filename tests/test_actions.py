@@ -9,6 +9,7 @@ FIXTURES = {"repo_get": {}, "contents_read": {"path": "README.md"}, "issue_list"
 FIXTURES["pr_update_body"] = {"number": 2, "body": "Updated"}
 for action in ("issue_comment_get", "issue_comment_reaction", "pr_review_comment_get", "pr_review_comment_reaction"):
     FIXTURES[action] = {"comment_id": 3}
+FIXTURES["label_create"] = {"name": "bug", "color": "aabbcc"}
 FIXTURES["issue_labels_add"] = {"number": 1, "labels": ["bug"]}
 FIXTURES["issue_label_remove"] = {"number": 1, "label": "bug"}
 FIXTURES["pr_review_comment"] = {"number": 2, "body": "Review", "commit_id": SHA, "path": "src/main.py", "line": 10, "side": "RIGHT"}
@@ -122,6 +123,7 @@ class ActionsTests(unittest.TestCase):
             "issue_comment_reaction": ("POST", "/repos/acme/repo/issues/comments/3/reactions"),
             "pr_review_comment_get": ("GET", "/repos/acme/repo/pulls/comments/3"),
             "pr_review_comment_reaction": ("POST", "/repos/acme/repo/pulls/comments/3/reactions"),
+            "label_create": ("POST", "/repos/acme/repo/labels"),
             "issue_labels_add": ("POST", "/repos/acme/repo/issues/1/labels"),
             "issue_label_remove": ("DELETE", "/repos/acme/repo/issues/1/labels/bug"),
             "pr_review_comment": ("POST", "/repos/acme/repo/pulls/2/comments"),

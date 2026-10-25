@@ -375,6 +375,22 @@ class Session:
         except BaseException:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 
+    def create_label(self, params, request):
+        response = self.request('POST', '/labels', body=request.body, mutation=True)
+        try:
+            result = response.data
+            if (response.status_code != 201 or not isinstance(result, dict)
+                    or type(result.get('id')) is not int or result['id'] <= 0
+                    or result.get('name') != params['name']
+                    or not isinstance(result.get('color'), str)
+                    or result['color'].lower() != params['color']
+                    or result.get('description') != params['description']):
+                raise ValueError()
+            self.check_repo(result)
+            return self.safe({field: result[field] for field in ('id', 'name', 'color', 'description')})
+        except BaseException:
+            raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
+
     def issue_labels(self, action, params, request):
         target = self.target(params['number'], False)
         if type(target.get('number')) is not int:
@@ -407,6 +423,7 @@ class Session:
             return self.source_comment(action, params, request)
         if action in {'issue_comment_reaction', 'pr_review_comment_reaction'}:
             return self.comment_reaction(action, params, request)
+        if action == 'label_create':return self.create_label(params, request)
         if action == 'pr_update_body':return self.update_pr_body(params, request)
         if action in {'issue_labels_add', 'issue_label_remove'}:
             return self.issue_labels(action, params, request)

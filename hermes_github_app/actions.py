@@ -40,6 +40,7 @@ ACTIONS = {
     "issue_comment": ActionSpec("issues", "write"),
     "issue_comment_get": ActionSpec("issues", "read"),
     "issue_comment_reaction": ActionSpec("issues", "write"),
+    "label_create": ActionSpec("issues", "write"),
     "issue_labels_add": ActionSpec("issues", "write"),
     "issue_label_remove": ActionSpec("issues", "write"),
     "pr_list": ActionSpec("pull_requests", "read"),
@@ -123,6 +124,7 @@ _SCHEMAS = {
     "issue_comment": ({"number", "body"}, set()),
     "issue_comment_get": ({"comment_id"}, set()),
     "issue_comment_reaction": ({"comment_id"}, set()),
+    "label_create": ({"name", "color"}, {"description"}),
     "issue_labels_add": ({"number", "labels"}, set()),
     "issue_label_remove": ({"number", "label"}, set()),
     "pr_list": (set(), {"state", "page", "per_page"}),
@@ -185,6 +187,13 @@ def validate_params(action, params):
             if not isinstance(state, str) or state not in {"open", "closed", "all"}:
                 raise ActionError("invalid state")
             result["state"] = state
+    if action == "label_create":
+        result["name"] = valid_label(result["name"])
+        color = result["color"]
+        if not isinstance(color, str) or not re.fullmatch(r"[a-fA-F0-9]{6}", color):
+            raise ActionError("invalid color")
+        result["color"] = color.lower()
+        result["description"] = _text(result.get("description", ""), "description", maximum=100, blank=True)
     if action == "issue_labels_add":
         labels = result["labels"]
         if not isinstance(labels, list) or not 1 <= len(labels) <= 100:
@@ -258,6 +267,8 @@ def build_request(action: str, repo: str, params: dict) -> Request:
         if action.endswith("_get"):
             return Request("GET", path, {}, None)
         return Request("POST", path + "/reactions", {}, {"content": "eyes"})
+    if action == "label_create":
+        return Request("POST", prefix + "/labels", {}, p)
     if action == "issue_labels_add":
         return Request("POST", prefix + f"/issues/{p['number']}/labels", {}, {"labels": p["labels"]})
     if action == "issue_label_remove":
