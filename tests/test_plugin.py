@@ -288,7 +288,7 @@ print("Public registration kept strict arguments and an existing security hook")
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_twenty_four_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
+def test_twenty_five_flat_tools_are_registered_with_distinct_handlers(configuration, monkeypatch):
     from hermes_github_app.actions import ACTIONS, PARAMETER_FIELDS
     monkeypatch.setattr(plugin, 'GitHubClient', Mock())
     ctx = Mock()
