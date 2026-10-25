@@ -14,7 +14,7 @@ class PolicyTests(unittest.TestCase):
             policy.authorize(repo, action)
 
     def test_frozen_profiles_and_explicit_merge(self):
-        self.assertEqual(len(ACTIONS), 24)
+        self.assertEqual(len(ACTIONS), 25)
         self.assertEqual(len(READ_ACTIONS), 8)
         self.assertEqual(len(WRITE_ACTIONS), 13)
         for access, expected in [("read", READ_ACTIONS), ("write", WRITE_ACTIONS)]:

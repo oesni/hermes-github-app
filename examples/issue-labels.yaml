@@ -14,4 +14,4 @@ policy:
     acme/support:
       allow_actions: [issue_labels_add, issue_label_remove]
 
-# To permit repository label creation as well, add label_create to allow_actions.
+# To permit repository label creation and lookup as well, add label_create and label_get to allow_actions.

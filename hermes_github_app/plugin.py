@@ -143,7 +143,7 @@ def tool_schema(action):
         elif field == 'labels':
             prop = {'anyOf': [{'type': 'array', 'minItems': 1, 'maxItems': 100, 'uniqueItems': True,
                               'items': {'type': 'string', 'minLength': 1, 'maxLength': 50}}]}
-        elif field == 'name' and action == 'label_create':
+        elif field == 'name' and action in {'label_create', 'label_get'}:
             prop.update(minLength=1, maxLength=50)
         elif field == 'color' and action == 'label_create':
             prop.update(pattern='^[a-fA-F0-9]{6}$', description='Six hexadecimal digits without #.')
@@ -175,6 +175,8 @@ def tool_schema(action):
         description += ' Add only an eyes reaction to one comment ID. Requires explicit policy allowance; never retries uncertain writes.'
     if action == 'pr_update_body':
         description += ' Replace only the body of an existing PR, including an empty body. Requires explicit policy allowance; concurrent edits are not protected.'
+    if action == 'label_get':
+        description += ' Read one repository label by name. Requires explicit policy allowance. Returns current existence and metadata only; does not establish why a previous creation failed, who created it, or whether a prior request is still pending. Never creates or retries mutations.'
     if action == 'label_create':
         description += ' Create a repository label with name, six-digit color and optional description. Requires explicit policy allowance. Existing names are rejected; never updates labels or retries uncertain writes.'
     if action == 'issue_labels_add':

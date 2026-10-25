@@ -187,7 +187,7 @@ plugin.register(ctx)
 assert registry.get_entry("github_repo_get") is not None
 assert registry.get_entry("github_app_action") is None
 from hermes_github_app.actions import ACTIONS
-assert len(ACTIONS) == 24
+assert len(ACTIONS) == 25
 assert all(registry.get_entry("github_" + name) is not None for name in ACTIONS)
 assert all(registry.get_entry(name) is None for name in ACTIONS)
 inline = {"repo": "acme/demo", "number": 1, "body": "Review", "commit_id": "a" * 40,
@@ -212,6 +212,15 @@ for name, args in [("github_issue_labels_add", {"repo": "acme/demo", "number": 1
         rejected = model_tools.handle_function_call(name, dict(args, **{field: value}), task_id="default", session_id="native-test", tool_call_id="bad-label")
         assert json.loads(rejected)["code"] == "invalid_arguments", rejected
         assert service.execute.call_count == before
+label_get = {"repo": "Acme/Demo", "name": " 분류/bug "}
+accepted = model_tools.handle_function_call("github_label_get", label_get, task_id="default", session_id="native-test", tool_call_id="get-label")
+assert json.loads(accepted)["ok"], accepted
+assert service.execute.call_args.args == ("label_get", "acme/demo", {"name": label_get["name"]})
+for field, value in (("name", False), ("name", ".."), ("number", 1)):
+    before = service.execute.call_count
+    rejected = model_tools.handle_function_call("github_label_get", dict(label_get, **{field: value}), task_id="default", session_id="native-test", tool_call_id="bad-get-label")
+    assert json.loads(rejected)["code"] == "invalid_arguments", rejected
+    assert service.execute.call_count == before
 label_create = {"repo": "Acme/Demo", "name": "분류/bug", "color": "AABBCC", "description": ""}
 accepted = model_tools.handle_function_call("github_label_create", label_create, task_id="default", session_id="native-test", tool_call_id="create-label")
 assert json.loads(accepted)["ok"], accepted
@@ -286,7 +295,7 @@ def test_twenty_four_flat_tools_are_registered_with_distinct_handlers(configurat
     plugin.register(ctx)
     registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
     assert set(registrations) == {'github_' + action for action in ACTIONS}
-    assert len({id(item['handler']) for item in registrations.values()}) == 24
+    assert len({id(item['handler']) for item in registrations.values()}) == 25
     for action in ACTIONS:
         item = registrations['github_' + action]
         assert item['schema']['name'] == 'github_' + action
@@ -437,4 +446,25 @@ def test_label_create_registered_handler_forwards_arguments(configuration, monke
     for invalid in ({'name': False}, {'name': ' bug'}, {'color': 123456}, {'description': None}, {'number': 1}):
         before = service.execute.call_count
         assert json.loads(entry['handler']({'repo': 'acme/demo', **params, **invalid}))['code'] == 'invalid_arguments'
+        assert service.execute.call_count == before
+
+
+def test_label_get_registered_handler_forwards_arguments(configuration, monkeypatch):
+    service = Mock()
+    service.execute.return_value = {'ok': True, 'data': {'exists': False}}
+    monkeypatch.setattr(plugin, 'GitHubClient', Mock())
+    monkeypatch.setattr(plugin, 'GitHubService', Mock(return_value=service))
+    ctx = Mock()
+    plugin.register(ctx)
+    registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
+    entry = registrations['github_label_get']
+    schema = entry['schema']['parameters']
+    assert schema['additionalProperties'] is False
+    assert set(schema['required']) == set(schema['properties']) == {'repo', 'name'}
+    assert schema['properties']['name']['maxLength'] == 50
+    assert json.loads(entry['handler']({'repo': 'Acme/Demo', 'name': ' bug '}))['data'] == {'exists': False}
+    assert service.execute.call_args.args == ('label_get', 'acme/demo', {'name': ' bug '})
+    for invalid in ({'name': False}, {'name': '..'}, {'number': 1}):
+        before = service.execute.call_count
+        assert json.loads(entry['handler']({'repo': 'acme/demo', 'name': 'bug', **invalid}))['code'] == 'invalid_arguments'
         assert service.execute.call_count == before

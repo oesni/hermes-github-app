@@ -149,6 +149,15 @@ class InlineCommentConfigTests(unittest.TestCase):
 
 
 class LabelConfigTests(unittest.TestCase):
+    def test_label_get_yaml_grant_and_deny(self):
+        config = parse_config(BASE + '  repository_rules:\n    acme/repo:\n      allow_actions: [label_get]\n')
+        self.assertEqual(config.policy.authorize('Acme/Repo', 'label_get'), 'acme/repo')
+        with self.assertRaises(PolicyError):
+            parse_config(BASE).policy.authorize('acme/repo', 'label_get')
+        denied = parse_config(BASE + '  allow_actions: [label_get]\n  deny_actions: [label_get]\n')
+        with self.assertRaises(PolicyError):
+            denied.policy.authorize('acme/repo', 'label_get')
+
     def test_label_create_yaml_grant_and_deny(self):
         config = parse_config(BASE + '  allow_actions: [label_create]\n')
         self.assertEqual(config.version, 1)

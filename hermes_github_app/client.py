@@ -62,7 +62,7 @@ class GitHubClient:
                 "Accept-Encoding": "identity",
             }) as response:
                 if response.status_code == 404 and missing:
-                    return Response(None)
+                    return Response(None, status_code=404)
                 if not 200 <= response.status_code < 300:
                     if mutation and response.status_code >= 500:
                         raise ClientError("GitHub mutation outcome is uncertain.", "uncertain_outcome")
@@ -375,6 +375,24 @@ class Session:
         except BaseException:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 
+    def get_label(self, params, request):
+        response = self.request('GET', request.path.removeprefix(self.prefix), missing=True)
+        if response.status_code == 404:
+            return {'exists': False}
+        result = response.data
+        if (response.status_code != 200 or not isinstance(result, dict)
+                or type(result.get('id')) is not int or result['id'] <= 0
+                or not isinstance(result.get('name'), str)
+                or result['name'].casefold() != params['name'].casefold()
+                or not isinstance(result.get('color'), str)
+                or not re.fullmatch(r'[a-fA-F0-9]{6}', result['color'])
+                or 'description' not in result
+                or (result['description'] is not None and not isinstance(result['description'], str))):
+            raise ClientError('Unverifiable GitHub label response.')
+        self.check_repo(result)
+        return self.safe({'exists': True, 'id': result['id'], 'name': result['name'],
+                          'color': result['color'], 'description': result['description'] or ''})
+
     def create_label(self, params, request):
         response = self.request('POST', '/labels', body=request.body, mutation=True)
         try:
@@ -426,6 +444,7 @@ class Session:
             return self.source_comment(action, params, request)
         if action in {'issue_comment_reaction', 'pr_review_comment_reaction'}:
             return self.comment_reaction(action, params, request)
+        if action == 'label_get':return self.get_label(params, request)
         if action == 'label_create':return self.create_label(params, request)
         if action == 'pr_update_body':return self.update_pr_body(params, request)
         if action in {'issue_labels_add', 'issue_label_remove'}:

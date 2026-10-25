@@ -40,6 +40,7 @@ ACTIONS = {
     "issue_comment": ActionSpec("issues", "write"),
     "issue_comment_get": ActionSpec("issues", "read"),
     "issue_comment_reaction": ActionSpec("issues", "write"),
+    "label_get": ActionSpec("issues", "read"),
     "label_create": ActionSpec("issues", "write"),
     "issue_labels_add": ActionSpec("issues", "write"),
     "issue_label_remove": ActionSpec("issues", "write"),
@@ -124,6 +125,7 @@ _SCHEMAS = {
     "issue_comment": ({"number", "body"}, set()),
     "issue_comment_get": ({"comment_id"}, set()),
     "issue_comment_reaction": ({"comment_id"}, set()),
+    "label_get": ({"name"}, set()),
     "label_create": ({"name", "color"}, {"description"}),
     "issue_labels_add": ({"number", "labels"}, set()),
     "issue_label_remove": ({"number", "label"}, set()),
@@ -187,6 +189,8 @@ def validate_params(action, params):
             if not isinstance(state, str) or state not in {"open", "closed", "all"}:
                 raise ActionError("invalid state")
             result["state"] = state
+    if action == "label_get":
+        result["name"] = valid_label(result["name"])
     if action == "label_create":
         result["name"] = valid_label(result["name"])
         if result["name"] != result["name"].strip():
@@ -269,6 +273,8 @@ def build_request(action: str, repo: str, params: dict) -> Request:
         if action.endswith("_get"):
             return Request("GET", path, {}, None)
         return Request("POST", path + "/reactions", {}, {"content": "eyes"})
+    if action == "label_get":
+        return Request("GET", prefix + "/labels/" + quote(p["name"], safe=""), {}, None)
     if action == "label_create":
         return Request("POST", prefix + "/labels", {}, p)
     if action == "issue_labels_add":
