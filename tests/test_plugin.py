@@ -212,6 +212,15 @@ for name, args in [("github_issue_labels_add", {"repo": "acme/demo", "number": 1
         rejected = model_tools.handle_function_call(name, dict(args, **{field: value}), task_id="default", session_id="native-test", tool_call_id="bad-label")
         assert json.loads(rejected)["code"] == "invalid_arguments", rejected
         assert service.execute.call_count == before
+label_create = {"repo": "Acme/Demo", "name": "분류/bug", "color": "AABBCC", "description": ""}
+accepted = model_tools.handle_function_call("github_label_create", label_create, task_id="default", session_id="native-test", tool_call_id="create-label")
+assert json.loads(accepted)["ok"], accepted
+assert service.execute.call_args.args == ("label_create", "acme/demo", {key: value for key, value in label_create.items() if key != "repo"})
+for field, value in (("name", " bug"), ("color", "#aabbcc"), ("description", "x" * 101), ("url", "https://evil.invalid")):
+    before = service.execute.call_count
+    rejected = model_tools.handle_function_call("github_label_create", dict(label_create, **{field: value}), task_id="default", session_id="native-test", tool_call_id="bad-create-label")
+    assert json.loads(rejected)["code"] == "invalid_arguments", rejected
+    assert service.execute.call_count == before
 new_operations = [("github_pr_update_body", {"repo":"acme/demo","number":1,"body":""})]
 new_operations += [("github_" + name, {"repo":"acme/demo","comment_id":2**53 + 1}) for name in
                    ("issue_comment_get","issue_comment_reaction","pr_review_comment_get","pr_review_comment_reaction")]
@@ -408,3 +417,24 @@ def test_public_manifest_names_match_catalog():
     manifest=YAML(typ='safe').load((Path(__file__).resolve().parents[1]/'plugin.yaml').read_text())
     assert set(manifest['provides_tools'])=={'github_'+action for action in ACTIONS}
     assert len(manifest['provides_tools'])==len(ACTIONS)
+
+
+def test_label_create_registered_handler_forwards_arguments(configuration, monkeypatch):
+    service = Mock()
+    service.execute.return_value = {'ok': True, 'data': {}}
+    monkeypatch.setattr(plugin, 'GitHubClient', Mock())
+    monkeypatch.setattr(plugin, 'GitHubService', Mock(return_value=service))
+    ctx = Mock()
+    plugin.register(ctx)
+    registrations = {call.kwargs['name']: call.kwargs for call in ctx.register_tool.call_args_list}
+    entry = registrations['github_label_create']
+    schema = entry['schema']['parameters']
+    assert schema['additionalProperties'] is False
+    assert set(schema['required']) == {'repo', 'name', 'color'}
+    params = {'name': '분류 /?#%', 'color': 'AABBCC', 'description': ''}
+    assert json.loads(entry['handler']({'repo': 'Acme/Demo', **params}))['ok']
+    assert service.execute.call_args.args == ('label_create', 'acme/demo', params)
+    for invalid in ({'name': False}, {'name': ' bug'}, {'color': 123456}, {'description': None}, {'number': 1}):
+        before = service.execute.call_count
+        assert json.loads(entry['handler']({'repo': 'acme/demo', **params, **invalid}))['code'] == 'invalid_arguments'
+        assert service.execute.call_count == before

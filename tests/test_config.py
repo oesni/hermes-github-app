@@ -149,6 +149,16 @@ class InlineCommentConfigTests(unittest.TestCase):
 
 
 class LabelConfigTests(unittest.TestCase):
+    def test_label_create_yaml_grant_and_deny(self):
+        config = parse_config(BASE + '  allow_actions: [label_create]\n')
+        self.assertEqual(config.version, 1)
+        self.assertEqual(config.policy.authorize('Acme/Repo', 'label_create'), 'acme/repo')
+        with self.assertRaises(PolicyError):
+            parse_config(BASE).policy.authorize('acme/repo', 'label_create')
+        denied = parse_config(BASE + '  allow_actions: [label_create]\n  deny_actions: [label_create]\n')
+        with self.assertRaises(PolicyError):
+            denied.policy.authorize('acme/repo', 'label_create')
+
     def test_explicit_label_example_and_frozen_profiles(self):
         config=parse_config((Path(__file__).resolve().parents[1]/'examples/issue-labels.yaml').read_bytes())
         self.assertEqual(config.version,1)

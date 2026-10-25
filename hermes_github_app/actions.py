@@ -189,6 +189,8 @@ def validate_params(action, params):
             result["state"] = state
     if action == "label_create":
         result["name"] = valid_label(result["name"])
+        if result["name"] != result["name"].strip():
+            raise ActionError("invalid label name")
         color = result["color"]
         if not isinstance(color, str) or not re.fullmatch(r"[a-fA-F0-9]{6}", color):
             raise ActionError("invalid color")

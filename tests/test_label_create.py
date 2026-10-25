@@ -34,8 +34,8 @@ def test_exact_creation_request_and_minimal_result(key_file):
 
 
 def test_optional_description_is_empty_and_name_is_literal(key_file):
-    params = {'name': ' X😀 ', 'color': 'FF0099'}
-    expected = {'name': ' X😀 ', 'color': 'ff0099', 'description': ''}
+    params = {'name': 'X 😀', 'color': 'FF0099'}
+    expected = {'name': 'X 😀', 'color': 'ff0099', 'description': ''}
     assert validate_params('label_create', params) == expected
     request = build_request('label_create', 'Acme/Demo', params)
     assert request.body == expected and request.path == '/repos/acme/demo/labels'
@@ -45,6 +45,7 @@ def test_optional_description_is_empty_and_name_is_literal(key_file):
 
 @pytest.mark.parametrize('field,value', [
     ('name', ''), ('name', ' '), ('name', '.'), ('name', '..'), ('name', 'a'*51),
+    ('name', ' bug'), ('name', 'bug '), ('name', '\u2003bug'), ('name', 'bug\u00a0'),
     ('name', 'a\n'), ('name', '\ud800'), ('name', True), ('name', None),
     ('color', '#aabbcc'), ('color', 'abc'), ('color', 'aabbccd'), ('color', 'gg0000'),
     ('color', 'aabbcc\n'), ('color', 123456), ('color', None),
@@ -166,3 +167,30 @@ def test_schema_exposes_only_creation_fields():
     assert params['properties']['name']['maxLength'] == 50
     assert params['properties']['color']['pattern'] == '^[a-fA-F0-9]{6}$'
     assert params['properties']['description']['maxLength'] == 100
+
+
+@pytest.mark.parametrize('provided', [False, True])
+@pytest.mark.parametrize('returned', ['', None])
+def test_empty_description_accepts_nullable_response(key_file, provided, returned):
+    params = {'name': 'bug', 'color': 'aabbcc'}
+    if provided:
+        params['description'] = ''
+    api = API(key_file, {('POST', '/labels'): httpx.Response(201, json={
+        'id': 1, **params, 'description': returned})})
+    assert api.run('label_create', params) == {'id': 1, **params, 'description': ''}
+
+
+def test_missing_description_response_remains_uncertain(key_file):
+    params = {'name': 'bug', 'color': 'aabbcc'}
+    api = API(key_file, {('POST', '/labels'): httpx.Response(201, json={'id': 1, **params})})
+    with pytest.raises(ClientError) as caught:
+        api.run('label_create', params)
+    assert caught.value.code == 'uncertain_outcome'
+    assert len(api.calls) == 4
+
+
+def test_whitespace_description_is_accepted_and_preserved(key_file):
+    params = {**PARAMS, 'description': '   '}
+    assert validate_params('label_create', params) == params
+    api = API(key_file, {('POST', '/labels'): httpx.Response(201, json={'id': 1, **params})})
+    assert api.run('label_create', params) == {'id': 1, **params}

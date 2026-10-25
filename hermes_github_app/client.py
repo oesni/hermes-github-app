@@ -384,10 +384,13 @@ class Session:
                     or result.get('name') != params['name']
                     or not isinstance(result.get('color'), str)
                     or result['color'].lower() != params['color']
-                    or result.get('description') != params['description']):
+                    or 'description' not in result
+                    or (result['description'] != params['description']
+                        and not (result['description'] is None and params['description'] == ''))):
                 raise ValueError()
             self.check_repo(result)
-            return self.safe({field: result[field] for field in ('id', 'name', 'color', 'description')})
+            return self.safe({'id': result['id'], 'name': result['name'],
+                              'color': result['color'], 'description': result['description'] or ''})
         except BaseException:
             raise ClientError('GitHub mutation outcome is uncertain.', 'uncertain_outcome') from None
 
