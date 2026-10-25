@@ -32,13 +32,13 @@ For each selected repository:
   - (global deny_actions + repo deny_actions)
 ```
 
-`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Configuration version 1 recognizes twenty-three actions, including `pr_review_comment`, which requires an explicit `allow_actions` entry. The read and write profile expansions remain unchanged; upgrading does not grant inline comments, label mutations, PR body updates, source comment reads, reactions or Git publication automatically.
+`read` is a baseline, not a ceiling: inherited/global allowances still apply. An empty repository rule inherits; it does not deny. Action lists default to empty; unknown actions and wildcards are errors. Configuration version 1 recognizes twenty-five actions, including `pr_review_comment`, which requires an explicit `allow_actions` entry. The read and write profile expansions remain unchanged; upgrading does not grant inline comments, repository label lookup, label mutations, PR body updates, source comment reads, reactions or Git publication automatically.
 
 | Profile | Configuration actions (public tools add `github_`) |
 | --- | --- |
 | read | `repo_get`, `contents_read`, `issue_list`, `issue_get`, `issue_comments_list`, `pr_list`, `pr_get`, `pr_comments_list` |
 | write | All read actions plus `issue_create`, `issue_comment`, `pr_create`, `pr_comment`, `branch_create` |
-| explicit allowance only | `pr_merge`, `pr_review_comment`, `issue_labels_add`, `issue_label_remove`, `pr_update_body`, `issue_comment_get`, `pr_review_comment_get`, `issue_comment_reaction`, `pr_review_comment_reaction`, `git_push` |
+| explicit allowance only | `pr_merge`, `pr_review_comment`, `label_create`, `label_get`, `issue_labels_add`, `issue_label_remove`, `pr_update_body`, `issue_comment_get`, `pr_review_comment_get`, `issue_comment_reaction`, `pr_review_comment_reaction`, `git_push` |
 
 Each operation is a separate native tool named `github_<action>`; configuration actions remain unprefixed. For example, action `issue_comment` is exposed as `github_issue_comment`, and `pr_merge` as `github_pr_merge`. Arguments are flat: `github_issue_comment` takes `{repo, number, body}` and `github_pr_merge` takes `{repo, number, expected_head_sha, merge_method}`. Prefixed action names in configuration are rejected. There is no generic action dispatcher or legacy operation alias. The tool schema describes each operation's closed argument set; the specification defines bounds and refusal behavior. There is no raw REST/GraphQL, credential export, arbitrary file write, git clone, review submission or diff-reading API, general PR edits beyond the explicit body action, PR deletion, auto-merge, or merge queue. PR creation/merge supports same-repository branches. Branch creation is pinned to a verified source SHA and never overwrites existing refs. The separately allowed `github_git_push` publishes existing local commits to one branch; see [commit publication](docs/spec/commit-push.md). `contents_read` uses named branches/tags and limits regular files to 1 MiB, returning base64 bytes.
 
@@ -103,7 +103,7 @@ Publication preserves commit IDs and history, changes exactly one branch, and ne
 
 ## Host boundary
 
-The plugin registers twenty-three tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Enable the `github_app` toolset in Hermes to expose them.
+The plugin registers twenty-five tools through Hermes's public `register(ctx)` and `ctx.register_tool` API. Enable the `github_app` toolset in Hermes to expose them.
 
 ```yaml
 toolsets: [github_app]
@@ -143,7 +143,7 @@ Optional native tests register and dispatch tools through Hermes's public plugin
 
 ### Issue classification
 
-`github_issue_labels_add(repo, number, labels)` adds existing repository labels to an issue. `github_issue_label_remove(repo, number, label)` removes one label. Both preserve unrelated labels and reject pull request numbers. Names retain Unicode and punctuation, with plugin limits of 50 characters per name and 1–100 distinct additions per call. There is no explicit label creation, full replacement, or remove-all tool. Existence checks are not atomic with addition: a concurrent deletion or rename leaves GitHub authoritative for the add request, and the plugin cannot guarantee that the server never creates or recreates a label. Each action needs an explicit unprefixed `allow_actions` entry; the write profile stays unchanged. See [the contract](docs/spec/issue-label-actions.md) and [issue-labels.yaml](examples/issue-labels.yaml). An uncertain write is never retried automatically.
+`github_issue_labels_add(repo, number, labels)` adds existing repository labels to an issue. `github_issue_label_remove(repo, number, label)` removes one label. Both preserve unrelated labels and reject pull request numbers. Names retain Unicode and punctuation, with plugin limits of 50 characters per name and 1–100 distinct additions per call. There is no full replacement or remove-all tool. Existence checks are not atomic with addition: a concurrent deletion or rename leaves GitHub authoritative for the add request, and the plugin cannot guarantee that the server never creates or recreates a label. Each action needs an explicit unprefixed `allow_actions` entry; the write profile stays unchanged. See [the contract](docs/spec/issue-label-actions.md) and [issue-labels.yaml](examples/issue-labels.yaml). An uncertain write is never retried automatically.
 
 ## PR body and comment operations
 
@@ -154,3 +154,13 @@ Optional native tests register and dispatch tools through Hermes's public plugin
 `github_issue_comment_reaction(repo, comment_id)` and `github_pr_review_comment_reaction(repo, comment_id)` add one `eyes` reaction using Issues write or Pull requests write respectively. They accept no reaction-content selector. Success returns reaction ID, fixed content, actor metadata and `created` (`false` for an already-present reaction). An uncertain write is not retried automatically.
 
 All five operations require explicit unprefixed policy allowances and are model-callable wherever the `github_app` toolset is enabled. Action policy applies to repository and operation, not to individual callers. The [PR body and comment operations contract](docs/spec/pr-body-and-comment-operations.md) defines strict arguments, URL checks, response fields and error behavior.
+
+### Repository label creation
+
+`github_label_create(repo, name, color, description?)` creates a repository label without attaching it to an issue or PR. It requires an explicit `label_create` allowance and GitHub App Issues write permission. `name` follows the existing 1–50 character label-name rules and rejects leading/trailing whitespace; `color` is exactly six hexadecimal digits without `#`; optional `description` is at most 100 characters. Existing names are rejected by GitHub rather than updated or treated as successful creation. An uncertain mutation is never retried automatically. See the [creation contract](docs/spec/label-create.md).
+
+### Repository label lookup
+
+`github_label_get(repo, name)` reads one repository label by name with an explicit `label_get` allowance and GitHub App Issues read permission. It returns `data: {exists: true, id, name, color, description}` when found, or `data: {exists: false}` for a label-endpoint 404 after token scope and canonical repository checks. Authentication/repository failures and malformed responses remain errors. A null description is returned as an empty string. Lookup uses the existing label-name rules, including literal surrounding whitespace, and encodes the name as one URL path segment.
+
+Use lookup before creation or to inspect current state after an uncertain creation. Existence does not prove who created a label or why a previous request failed. Absence does not prove an earlier request cannot still complete. Neither tool automatically retries creation or overwrites conflicting label metadata. See the [lookup contract](docs/spec/label-get.md).
