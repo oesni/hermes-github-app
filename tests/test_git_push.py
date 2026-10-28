@@ -105,10 +105,13 @@ def test_invalid_bundle_cannot_mutate_remote(transport, repositories, change):
     assert git(repositories.remote, 'for-each-ref', '--format=%(refname)') == b'refs/heads/main\n'
 
 
-def test_incremental_bundle_requires_matching_expected_head(transport, repositories):
-    with pytest.raises(ClientError):
-        transport.publish(session(), arguments(repositories, incremental=True), lambda: None)
+def test_new_branch_thin_bundle_uses_existing_repository_base(transport, repositories):
+    result = transport.publish(session(), arguments(repositories, incremental=True), lambda: None)
+    assert result == {'branch': 'feature', 'sha': repositories.head,
+                      'previous_sha': None, 'created': True}
+    assert repositories.remote_head('feature') == repositories.head
     assert repositories.remote_head('main') == repositories.initial
+    assert git(repositories.remote, 'rev-list', 'feature') == git(repositories.work, 'rev-list', 'HEAD')
 
 
 def test_recheck_failure_prevents_final_publication(transport, repositories):
@@ -343,8 +346,8 @@ def test_noop_preserves_existing_commit(transport,repositories):
     assert repositories.remote_head('main')==repositories.head
 
 
-@pytest.mark.parametrize('prerequisites',['mismatched','multiple'])
-def test_invalid_prerequisites_are_rejected(transport,repositories,prerequisites):
+@pytest.mark.parametrize('prerequisites',['mismatched','additional'])
+def test_prerequisites_missing_from_repository_are_rejected(transport,repositories,prerequisites):
     params=arguments(repositories,branch='main',expected=repositories.initial,incremental=True)
     raw=base64.b64decode(params['bundle_base64'])
     if prerequisites=='mismatched':
@@ -353,8 +356,102 @@ def test_invalid_prerequisites_are_rejected(transport,repositories,prerequisites
         raw=raw.replace(b'\n',b'\n-'+b'a'*40+b' additional\n',1)
     params['bundle_base64']=base64.b64encode(raw).decode()
     with pytest.raises(ClientError) as error:transport.publish(session(),params,lambda:None)
-    assert error.value.code=='invalid_arguments'
+    assert error.value.code=='git_unavailable'
+    assert 'prerequisites could not be fetched' in str(error.value)
     assert repositories.remote_head('main')==repositories.initial
+
+
+@pytest.mark.parametrize('line',[b'not-a-prerequisite', b'-'+b'A'*40, b'-'+b'a'*39, b'-'+b'a'*40+b'x'])
+def test_malformed_prerequisite_lines_are_rejected_before_git(transport,repositories,monkeypatch,line):
+    params=arguments(repositories,branch='main',expected=repositories.initial,incremental=True)
+    raw=base64.b64decode(params['bundle_base64'])
+    raw=raw.replace(b'\n',b'\n'+line+b'\n',1)
+    params['bundle_base64']=base64.b64encode(raw).decode()
+    run=Mock();monkeypatch.setattr(transport,'_run',run)
+    with pytest.raises(ClientError) as error:transport.publish(session(),params,lambda:None)
+    assert error.value.code=='invalid_arguments'
+    run.assert_not_called()
+
+
+def test_too_many_prerequisites_rejected_before_git(transport,repositories,monkeypatch):
+    params=arguments(repositories,branch='main',expected=repositories.initial,incremental=True)
+    header,pack=base64.b64decode(params['bundle_base64']).split(b'\n\n',1)
+    lines=header.split(b'\n')
+    extra=[b'-%040x'%index for index in range(1,transport.MAX_PREREQUISITES+1)]
+    header=b'\n'.join([lines[0],*extra,*lines[1:]])
+    params['bundle_base64']=base64.b64encode(header+b'\n\n'+pack).decode()
+    run=Mock();monkeypatch.setattr(transport,'_run',run)
+    with pytest.raises(ClientError) as error:transport.publish(session(),params,lambda:None)
+    assert error.value.code=='size_limit'
+    run.assert_not_called()
+
+
+def test_prerequisite_without_subject_is_accepted(transport,repositories):
+    params=arguments(repositories,branch='main',expected=repositories.initial,incremental=True)
+    header,pack=base64.b64decode(params['bundle_base64']).split(b'\n\n',1)
+    lines=[line.split(b' ',1)[0] if line.startswith(b'-') else line for line in header.split(b'\n')]
+    assert b'-'+repositories.initial.encode() in lines
+    params['bundle_base64']=base64.b64encode(b'\n'.join(lines)+b'\n\n'+pack).decode()
+    result=transport.publish(session(),params,lambda:None)
+    assert result['sha']==repositories.head and repositories.remote_head('main')==repositories.head
+
+
+def merged_feature(repositories):
+    """Remote feature at F and main advanced to M; local merges main into feature."""
+    work=repositories.work
+    git(work,'checkout','-b','feature',repositories.initial)
+    feature=repositories.commit('feature.txt',b'feature\n','Feature work')
+    git(work,'push',str(repositories.remote),'HEAD:refs/heads/feature')
+    git(work,'checkout','-b','upstream',repositories.initial)
+    main=repositories.commit('main.txt',b'main\n','Main work')
+    git(work,'push','-f',str(repositories.remote),'HEAD:refs/heads/main')
+    git(work,'checkout','feature')
+    git(work,'merge','--no-ff','-m','Merge main into feature','upstream')
+    merge=git(work,'rev-parse','HEAD').decode().strip()
+    return feature,main,merge
+
+
+def test_merge_of_base_branch_publishes_with_multiple_prerequisites(transport,repositories):
+    feature,main,merge=merged_feature(repositories)
+    path=repositories.work.parent/'merge.bundle'
+    git(repositories.work,'bundle','create',str(path),'refs/heads/feature','^'+feature,'^'+main)
+    raw=path.read_bytes()
+    header=raw.split(b'\n\n',1)[0].split(b'\n')
+    assert sorted(line[1:41] for line in header if line.startswith(b'-'))==sorted([feature.encode(),main.encode()])
+    params={'branch':'feature','commit_sha':merge,'expected_head_sha':feature,
+            'bundle_base64':base64.b64encode(raw).decode()}
+    result=transport.publish(session(),params,lambda:None)
+    assert result=={'branch':'feature','sha':merge,'previous_sha':feature,'created':False}
+    assert repositories.remote_head('feature')==merge
+    assert git(repositories.remote,'rev-parse',merge+'^1',merge+'^2').decode().split()==[feature,main]
+    assert git(repositories.remote,'cat-file','commit',merge)==git(repositories.work,'cat-file','commit',merge)
+    assert repositories.remote_head('main')==main
+
+
+def test_merge_bundle_excluding_expected_through_base_still_fast_forwards(transport,repositories):
+    feature,main,merge=merged_feature(repositories)
+    path=repositories.work.parent/'merge.bundle'
+    # Only main is excluded, so the expected head travels inside the bundle.
+    git(repositories.work,'bundle','create',str(path),'refs/heads/feature','^'+main)
+    params={'branch':'feature','commit_sha':merge,'expected_head_sha':feature,
+            'bundle_base64':base64.b64encode(path.read_bytes()).decode()}
+    assert transport.publish(session(),params,lambda:None)['sha']==merge
+    assert repositories.remote_head('feature')==merge
+
+
+def test_merge_bundle_cannot_rewrite_divergent_expected_head(transport,repositories):
+    feature,main,merge=merged_feature(repositories)
+    git(repositories.work,'checkout','-b','divergent',repositories.initial)
+    divergent=repositories.commit('divergent.txt',b'divergent\n','Divergent work')
+    git(repositories.work,'push',str(repositories.remote),'HEAD:refs/heads/other')
+    git(repositories.work,'update-ref','refs/heads/other',merge)
+    path=repositories.work.parent/'merge.bundle'
+    git(repositories.work,'bundle','create',str(path),'refs/heads/other','^'+feature,'^'+main)
+    params={'branch':'other','commit_sha':merge,'expected_head_sha':divergent,
+            'bundle_base64':base64.b64encode(path.read_bytes()).decode()}
+    with pytest.raises(ClientError) as error:transport.publish(session(),params,lambda:None)
+    assert error.value.code=='target_changed'
+    assert repositories.remote_head('other')==divergent
 
 
 def test_pack_object_count_rejected_before_git(transport,repositories,monkeypatch):

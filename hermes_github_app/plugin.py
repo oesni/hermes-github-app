@@ -85,8 +85,9 @@ def _execute_host_operation(runtime, service, action, args, *, dispatcher=None, 
         return service.execute(action, repo, params, recheck_isolation=runtime.check)
     except PolicyError:
         return {'ok': False, 'code': 'policy_denied', 'error': 'GitHub action is not permitted.'}
-    except BundleInputError:
-        return {'ok': False, 'code': 'bundle_unavailable', 'error': 'Sandbox bundle could not be read safely in the active terminal task.'}
+    except BundleInputError as exc:
+        # Messages are fixed strings chosen by bundle_input, never terminal output.
+        return {'ok': False, 'code': 'bundle_unavailable', 'error': 'Sandbox bundle could not be read safely in the active terminal task: ' + str(exc)}
     except ActionError:
         return {'ok': False, 'code': 'invalid_arguments', 'error': 'Invalid tool arguments.'}
     except (IsolationError, SecureFileError):
@@ -166,7 +167,7 @@ def tool_schema(action):
         properties[field] = prop
     description = action.replace('_', ' ').capitalize() + ' under host repository policy.'
     if action == 'git_push':
-        description += ' Supply exactly one of bundle_path (active terminal sandbox) or bundle_base64 (direct data). Publish a bounded Git bundle without exposing credentials. Requires explicit allowance; expected_head_sha is null for creation or the exact current head for a fast-forward. Never retries uncertain pushes.'
+        description += ' Supply exactly one of bundle_path (active terminal sandbox) or bundle_base64 (direct data). Publish a bounded Git bundle without exposing credentials. Requires explicit allowance; expected_head_sha is null for creation or the exact current head for a fast-forward. An incremental bundle may exclude commits already in the repository, including a merged base branch. Never retries uncertain pushes.'
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
     if action in {'issue_comment_get', 'pr_review_comment_get'}:
