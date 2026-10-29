@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -17,6 +18,10 @@ MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 MAX_OBJECT_BYTES = 256 * 1024 * 1024
 MAX_OBJECTS = 100000
 MAX_OUTPUT_BYTES = 1024 * 1024
+MAX_HEADER_BYTES = 64 * 1024
+MAX_PREREQUISITES = 64
+# Git writes "-<oid> <subject>", but the subject (and its separator) is optional.
+_PREREQUISITE = re.compile(rb'-([0-9a-f]{40})(?: [^\n]*)?\Z')
 
 
 def decode_bundle(value):
@@ -95,19 +100,25 @@ def publish(session, params, recheck):
     header, separator, pack = data.partition(b'\n\n')
     lines = header.split(b'\n')
     advertised = (params['commit_sha'] + ' refs/heads/' + params['branch']).encode()
-    if (not separator or len(header) > 4096 or not pack.startswith(b'PACK')
+    if (not separator or len(header) > MAX_HEADER_BYTES or not pack.startswith(b'PACK')
             or lines[0] != b'# v2 git bundle' or lines[-1] != advertised):
         raise ClientError('Invalid Git bundle.', 'invalid_arguments')
     if len(pack) < 32 or int.from_bytes(pack[4:8], 'big') not in {2, 3}:
         raise ClientError('Invalid Git pack header.', 'invalid_arguments')
     if int.from_bytes(pack[8:12], 'big') > MAX_OBJECTS:
         raise ClientError('Git pack object count exceeds the limit.', 'size_limit')
-    prerequisites = lines[1:-1]
+    prerequisites = []
+    for line in lines[1:-1]:
+        match = _PREREQUISITE.match(line)
+        if match is None:
+            raise ClientError('Invalid Git bundle: only prerequisite lines may precede the branch.',
+                              'invalid_arguments')
+        sha = match.group(1).decode('ascii')
+        if sha not in prerequisites:
+            prerequisites.append(sha)
+    if len(prerequisites) > MAX_PREREQUISITES:
+        raise ClientError('Git bundle has too many prerequisites.', 'size_limit')
     expected = params['expected_head_sha']
-    if prerequisites:
-        if (len(prerequisites) != 1 or expected is None
-                or not prerequisites[0].startswith(('-' + expected + ' ').encode())):
-            raise ClientError('Bundle prerequisite must match the expected head.', 'invalid_arguments')
     ref = 'refs/heads/' + params['branch']
     deadline = min(session.deadline, time.monotonic() + 120)
     with tempfile.TemporaryDirectory(prefix='hermes-git-push-') as directory:
@@ -122,14 +133,16 @@ def publish(session, params, recheck):
         def run(args, *, network=False, mutation=False):
             return _run(root, args, deadline, session._token if network else None, mutation)
 
-        def required(args, *, network=False, error_code='git_unavailable'):
+        def required(args, message, *, network=False, error_code='git_unavailable'):
             code, out = run(args, network=network)
             if code:
-                raise ClientError('Git data could not be verified.', error_code)
+                raise ClientError(message, error_code)
             return out
 
-        required(['init', '--bare', '--template=', '--object-format=sha1', '.'])
-        remote_head = required(['ls-remote', '--refs', _remote(session.repo), ref], network=True)
+        required(['init', '--bare', '--template=', '--object-format=sha1', '.'],
+                 'Temporary Git repository could not be created.')
+        remote_head = required(['ls-remote', '--refs', _remote(session.repo), ref],
+                               'Remote branch could not be read.', network=True)
         rows = [line for line in remote_head.splitlines()
                 if line.split(b'\t')[-1] == ref.encode()]
         if expected is None:
@@ -139,27 +152,47 @@ def publish(session, params, recheck):
         if not matches:
             raise ClientError('Remote branch differs from the expected head.', 'target_changed')
         if prerequisites:
+            # Every prerequisite, such as base-branch commits merged into the
+            # update, must already exist in the selected repository. Each is
+            # fetched as a depth-1 snapshot that counts toward the object limits.
+            # The expected head is fetched too so the fast-forward check can
+            # reach it even when the bundle excludes it through another boundary.
+            bases = prerequisites + ([expected] if expected and expected not in prerequisites else [])
             required(['fetch', '--no-tags', '--no-recurse-submodules', '--depth=1',
-                      _remote(session.repo), expected], network=True)
-            if required(['rev-parse', '--verify', 'FETCH_HEAD']).strip() != expected.encode():
-                raise ClientError('Git prerequisite changed.', 'target_changed')
-            required(['update-ref', 'refs/heads/bundle-base', expected])
-        required(['bundle', 'verify', str(bundle)], error_code='invalid_arguments')
-        required(['bundle', 'unbundle', str(bundle)], error_code='invalid_arguments')
-        kind = required(['cat-file', '-t', params['commit_sha']], error_code='invalid_arguments').strip()
+                      _remote(session.repo), *bases],
+                     'Bundle prerequisites could not be fetched; each must be a commit '
+                     'already in the selected repository.', network=True)
+            for index, sha in enumerate(bases):
+                code, kind = run(['cat-file', '-t', sha])
+                if code or kind.strip() != b'commit':
+                    raise ClientError('Bundle prerequisite is not a commit in the selected repository.',
+                                      'invalid_arguments')
+                required(['update-ref', 'refs/heads/bundle-base-' + str(index), sha],
+                         'Bundle prerequisite could not be recorded.')
+        required(['bundle', 'verify', str(bundle)],
+                 'Git bundle verification failed; the bundle is corrupt or needs history it '
+                 'neither contains nor lists as a prerequisite.', error_code='invalid_arguments')
+        required(['bundle', 'unbundle', str(bundle)], 'Git bundle could not be unpacked.',
+                 error_code='invalid_arguments')
+        kind = required(['cat-file', '-t', params['commit_sha']], 'Bundle target must be a commit.',
+                        error_code='invalid_arguments').strip()
         if kind != b'commit':
             raise ClientError('Bundle target must be a commit.', 'invalid_arguments')
         required(['update-ref', 'refs/heads/publication-target', params['commit_sha']],
+                 'Bundle target must be a commit.', error_code='invalid_arguments')
+        required(['fsck', '--strict', '--no-reflogs'], 'Git objects failed integrity checks.',
                  error_code='invalid_arguments')
-        required(['fsck', '--strict', '--no-reflogs'], error_code='invalid_arguments')
-        listing = required(['cat-file', '--batch-all-objects', '--batch-check=%(objectsize)'])
+        listing = required(['cat-file', '--batch-all-objects', '--batch-check=%(objectsize)'],
+                           'Git objects could not be measured.')
         sizes = listing.splitlines()
         if len(sizes) > MAX_OBJECTS or sum(int(size) for size in sizes) > MAX_OBJECT_BYTES:
             raise ClientError('Git objects exceed the size limit.', 'size_limit')
         if expected is not None:
             code, _ = run(['merge-base', '--is-ancestor', expected, params['commit_sha']])
             if code:
-                raise ClientError('Push must fast-forward the expected head.', 'target_changed')
+                raise ClientError('Push must fast-forward the expected head; the expected head must be '
+                                  'reachable from the commit through bundle history or prerequisites.',
+                                  'target_changed')
         recheck()
         # The explicit lease is checked by receive-pack atomically. The ancestry
         # check above forbids the history rewrites that a lease alone would allow.
