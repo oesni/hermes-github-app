@@ -115,7 +115,7 @@ def valid_ref(value, name="ref", branch=False):
 
 
 _SCHEMAS = {
-    "git_push": ({"branch", "commit_sha", "expected_head_sha"}, {"bundle_base64", "bundle_path"}),
+    "git_push": ({"branch", "commit_sha", "expected_head_sha"}, {"bundle_base64", "bundle_path", "workflow_write"}),
     "repo_get": (set(), set()),
     "contents_read": ({"path"}, {"ref"}),
     "issue_list": (set(), {"state", "page", "per_page"}),
@@ -160,6 +160,8 @@ def validate_params(action, params):
     result = dict(params)
     if action == "git_push":
         from .git_push import decode_bundle
+        if "workflow_write" in result and type(result["workflow_write"]) is not bool:
+            raise ActionError("workflow_write must be a boolean")
         result["branch"] = valid_ref(result["branch"], "branch", branch=True)
         for field in ("commit_sha", "expected_head_sha"):
             if field == "expected_head_sha" and result[field] is None:

@@ -78,6 +78,8 @@ def _execute_host_operation(runtime, service, action, args, *, dispatcher=None, 
             # Policy precedes sandbox reads; the service repeats policy/isolation
             # checks after transfer and immediately before the remote write.
             service.policy.authorize(repo, action)
+            if params.get('workflow_write', False):
+                service.policy.authorize(repo, 'git_push_workflows')
             from .git_push import MAX_BUNDLE_BYTES
             encoded = resolve_bundle_path(dispatcher, params['bundle_path'], context, MAX_BUNDLE_BYTES)
             params = {key: value for key, value in params.items() if key != 'bundle_path'}
@@ -152,7 +154,7 @@ def tool_schema(action):
             prop.update(maxLength=100)
         elif field == 'label':
             prop.update(minLength=1, maxLength=50)
-        elif field == 'draft':
+        elif field in {'draft', 'workflow_write'}:
             prop = {'anyOf': [{'type': 'boolean'}]}
         elif field == 'state':
             prop['enum'] = ['open', 'closed', 'all']
@@ -168,6 +170,7 @@ def tool_schema(action):
     description = action.replace('_', ' ').capitalize() + ' under host repository policy.'
     if action == 'git_push':
         description += ' Supply exactly one of bundle_path (active terminal sandbox) or bundle_base64 (direct data). Publish a bounded Git bundle without exposing credentials. Requires explicit allowance; expected_head_sha is null for creation or the exact current head for a fast-forward. An incremental bundle may exclude commits already in the repository, including a merged base branch. Never retries uncertain pushes.'
+        description += ' Set workflow_write to true only when workflow changes require it; this additionally requires the git_push_workflows policy grant and GitHub App workflows permission.'
     if action == 'branch_create':
         description += ' Supply source_branch plus expected_source_sha, or source_commit_sha; never both.'
     if action in {'issue_comment_get', 'pr_review_comment_get'}:

@@ -29,12 +29,12 @@ Hermes administrators configure one GitHub App installation with a YAML policy t
    | `policy.repositories.allow` | No | Repository selector list; default `[]` |
    | `policy.repositories.exclude` | Yes | Repository selector list; may be empty |
    | `policy.default_access` | Yes | Exact string `read` or `write` |
-   | `policy.allow_actions` | No | Exact action-name list; default `[]` |
-   | `policy.deny_actions` | No | Exact action-name list; default `[]` |
+   | `policy.allow_actions` | No | Exact action or policy-capability-name list; default `[]` |
+   | `policy.deny_actions` | No | Exact action or policy-capability-name list; default `[]` |
    | `policy.repository_rules` | No | Mapping from exact repository names to rule mappings; default `{}` |
    | `policy.repository_rules.<repo>.access` | No | Exact `read` or `write`; inherits `default_access` |
-   | `policy.repository_rules.<repo>.allow_actions` | No | Exact action-name list; default `[]` |
-   | `policy.repository_rules.<repo>.deny_actions` | No | Exact action-name list; default `[]` |
+   | `policy.repository_rules.<repo>.allow_actions` | No | Exact action or policy-capability-name list; default `[]` |
+   | `policy.repository_rules.<repo>.deny_actions` | No | Exact action or policy-capability-name list; default `[]` |
 
 
    A rule mapping may contain only `access`, `allow_actions`, and `deny_actions`. A rule value of `{}` inherits the global baseline and exceptions; it does not deny access. A list, string, or null in place of a rule mapping is invalid.
@@ -82,6 +82,9 @@ Hermes administrators configure one GitHub App installation with a YAML policy t
    | `issue_comment_reaction` | Add eyes to one issue/PR conversation comment; explicit allowance required | issues:write; [contract](pr-body-and-comment-operations.md) |
    | `pr_review_comment_reaction` | Add eyes to one PR inline review comment; explicit allowance required | pull_requests:write; [contract](pr-body-and-comment-operations.md) |
    | `pr_review_comment` | Add one line-specific PR diff comment; explicit allowance required | pull_requests:write; [inline-comment contract](pr-inline-review-comments.md) |
+
+
+   The separate explicit-only policy capability `git_push_workflows` is not a callable action. Together with `git_push` and the caller’s `workflow_write: true`, it permits a token with `workflows:write`; see the [workflow publication contract](workflow-push.md). It is excluded from both profiles and subject to the same repository selection and deny precedence.
 
 13. **Issue and PR separation and arguments.** The `issue_get`, `issue_comment`, `issue_comments_list`, `issue_labels_add`, and `issue_label_remove` actions reject PR numbers; their `pulls` counterparts reject issue numbers, including where GitHub uses shared API routes. The explicitly allowed `issue_comment_get` and `issue_comment_reaction` operations are a narrow exception: the shared issue-comment-ID namespace covers both issue and PR conversation comments. They use the documented Issues read/write permissions and do not grant issue-number operations on PRs. PR conversation comments do not include review submissions or line-specific review comments. PR changed-file/diff/commit/review reading and writing are unsupported except for line-specific comment creation in the [inline-comment contract](pr-inline-review-comments.md) and single source-comment reads and eyes reactions in the [PR body and comment operations contract](pr-body-and-comment-operations.md). The four issue/PR create/comment mutations accept only these parameters: `issue_create` requires `title` and permits `body`; `issue_comment` and `pr_comment` require `number` and `body`; `pr_create` requires `title`, `head`, and `base` and permits `body` and `draft`. Titles are nonblank strings of 1–256 Unicode code points with no control characters. Bodies are strings of at most 65536 Unicode code points; NUL is forbidden, line breaks and tabs are permitted. A create body's default is the empty string; comment bodies must contain a non-whitespace character. Numbers are integers from `1` through `2147483647`; booleans are invalid. `draft` is a boolean defaulting to `false`. Unknown fields are refused, including labels, assignees, milestones, issue-to-PR conversion, and `maintainer_can_modify`. `head` and `base` must name existing branches in the same selected repository: no fork-qualified `owner:branch`, URLs, raw commit IDs, or implicit branch creation. They must be valid short Git branch names and at most 255 UTF-8 bytes; `HEAD` and names starting with `refs/` are refused; all-hex strings of 40 or 64 characters are refused as commit-ID-shaped values even if a branch happens to have that name. The agent must use branches that already exist; the separate `git_push` action can publish local commits before PR creation. Only `pr_merge` grants merge capability; no action grants issue/PR closure, issue/PR deletion, or general edits beyond the explicit body operation in the [PR body and comment operations contract](pr-body-and-comment-operations.md) and label operations in the [label contract](issue-label-actions.md). An allowed mutation, including a branch creation or merge, may trigger repository workflows or bots; these downstream effects are outside the direct-action policy.
 

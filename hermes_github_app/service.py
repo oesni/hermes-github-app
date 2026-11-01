@@ -25,21 +25,32 @@ class GitHubService:
             check_isolation(recheck_isolation)
             canonical=self.policy.authorize(repo,action)
             params=validate_params(action,params)
+            workflow_write = action == 'git_push' and params.get('workflow_write', False)
+            if workflow_write:
+                self.policy.authorize(canonical, 'git_push_workflows')
             if action == 'git_push' and 'bundle_path' in params:
                 raise ActionError('Bundle path requires native tool dispatch.')
             if action == 'git_push':
                 from .git_push import require_supported_host
                 require_supported_host()
             request=build_request(action,canonical,params)
-            session=self.client.session(canonical,ACTIONS[action].permissions)
+            permissions = ACTIONS[action].permissions
+            if workflow_write:
+                permissions['workflows'] = 'write'
+            session=self.client.session(canonical,permissions)
             # Session establishes GitHub's canonical name; policy must cover it too.
             self.policy.authorize(session.repo,action)
+            if workflow_write:
+                self.policy.authorize(session.repo, 'git_push_workflows')
             if action == 'git_push':
                 from .git_push import publish
                 def recheck():
                     check_isolation(recheck_isolation)
                     self.policy.authorize(canonical, action)
                     self.policy.authorize(session.repo, action)
+                    if workflow_write:
+                        self.policy.authorize(canonical, 'git_push_workflows')
+                        self.policy.authorize(session.repo, 'git_push_workflows')
                 return {'ok': True, 'data': publish(session, params, recheck)}
             if action!='pr_merge':
                 return {'ok':True,'data':session.execute(action,params,request)}
