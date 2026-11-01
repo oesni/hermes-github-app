@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from .actions import ACTIONS, READ_ACTIONS, WRITE_ACTIONS, ActionError, canonical_repo
 
+POLICY_ACTIONS = frozenset(ACTIONS) | {"git_push_workflows"}
+
 
 class PolicyError(ValueError):
     pass
@@ -15,7 +17,7 @@ def _object(value, allowed, required=frozenset()):
 
 
 def _actions(value):
-    if not isinstance(value, list) or any(not isinstance(a, str) or a not in ACTIONS for a in value):
+    if not isinstance(value, list) or any(not isinstance(a, str) or a not in POLICY_ACTIONS for a in value):
         raise PolicyError("actions must be a list of known action names")
     if len(set(value)) != len(value):
         raise PolicyError("duplicate action")
@@ -97,7 +99,7 @@ class Policy:
             repo = canonical_repo(repo)
         except ActionError as exc:
             raise PolicyError("invalid repository") from exc
-        if not isinstance(action, str) or action not in ACTIONS:
+        if not isinstance(action, str) or action not in POLICY_ACTIONS:
             raise PolicyError("unknown action")
         if _matches(repo, self.exclude) or (self.mode == "allowlist" and not _matches(repo, self.allow)):
             raise PolicyError("repository access denied")

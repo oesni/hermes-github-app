@@ -56,6 +56,8 @@ The host confirms that the target is an open PR in the selected repository (fork
 
 ## Publish local commits
 
+Workflow changes may require GitHub App **Workflows: write** permission. To request it for a particular push, an operator must also explicitly allow the policy capability `git_push_workflows` for that repository and the caller must set `workflow_write: true`. This is a separate policy capability, not a tool; ordinary pushes continue to request only Contents write. The App installation must already have Workflows write; the plugin never grants or changes installation permissions. This extra permission can affect Actions, so grant it only where appropriate. See the [workflow publication contract](docs/spec/workflow-push.md).
+
 Explicitly allow `git_push` globally or for a selected repository; `access: write` alone does not grant it. For example, add `allow_actions: [git_push]` to the existing `policy.repository_rules.acme/demo` entry. Existing exclusions and `deny_actions` still win. The `git_push` grant permits creating a branch as well as updating it; a separate `branch_create` denial does not restrict that capability. It also authorizes the fixed terminal file-read command for `bundle_path` and host Git processes. No version change is needed.
 
 Commit in the agent's checkout, then create a bundle naming the destination branch. For a new branch:
